@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
+### Added
+
+- Offer an optional sync interval that checks for changes while the vault is open, even without vault events.
+
+### Documentation
+
+- Refresh the connection, filters, sync status, and About screenshots for 0.1.1.
+- Rewrite the README with quick links, installation from Community plugins, a first-sync walkthrough, and troubleshooting.
+
 ## [0.1.1] - 2026-11-23
 
 ### Fixed

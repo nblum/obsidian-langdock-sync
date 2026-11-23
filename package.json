@@ -1,6 +1,6 @@
 {
   "name": "obsidian-langdock-sync",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Sync Obsidian notes with Langdock.",
   "license": "MIT",
@@ -32,6 +32,7 @@
     "@wdio/spec-reporter": "10.2.0",
     "esbuild": "0.28.2",
     "eslint": "10.15.0",
+    "eslint-plugin-obsidianmd": "0.6.0",
     "globals": "17.11.0",
     "obsidian": "1.14.4",
     "sharp": "0.35.5",
@@ -42,5 +43,12 @@
   },
   "dependencies": {
     "yaml": "2.9.1"
+  },
+  "overrides": {
+    "eslint-plugin-obsidianmd": {
+      "@microsoft/eslint-plugin-sdl": {
+        "eslint-plugin-n": "17.24.0"
+      }
+    }
   }
 }

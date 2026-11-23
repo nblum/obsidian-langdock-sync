@@ -6,9 +6,12 @@ export interface PropertyFilter {
   value: string;
 }
 
+export const syncIntervals = [0, 15, 30, 60, 120] as const;
+
 export interface Settings {
   folderId: string;
   automatic: boolean;
+  syncIntervalMinutes: typeof syncIntervals[number];
   folders: string[];
   propertyFilters: PropertyFilter[];
 }
@@ -48,7 +51,13 @@ export function readData(data: unknown): {
     ? values.propertyFilters as PropertyFilter[]
     : [{ property: "classification", value: "public" }];
   return {
-    settings: { folderId, automatic: values.automatic === true && !!folderId && folders.length > 0, folders, propertyFilters },
+    settings: {
+      folderId,
+      automatic: values.automatic === true && !!folderId && folders.length > 0,
+      syncIntervalMinutes: syncIntervals.find((minutes) => minutes === values.syncIntervalMinutes) ?? 0,
+      folders,
+      propertyFilters,
+    },
     legacySecretId: typeof values.secretId === "string" ? values.secretId : null,
     language: isLanguagePreference(values.language) ? values.language : "auto",
     introductionSeen: values.introductionSeen === true,

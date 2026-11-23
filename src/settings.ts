@@ -1,6 +1,6 @@
 import { Modal, PluginSettingTab, requireApiVersion, Setting } from "obsidian";
 import type { App, SettingDefinitionRender } from "obsidian";
-import { isVisiblePath } from "./config.ts";
+import { isVisiblePath, syncIntervals } from "./config.ts";
 import { renderAbout } from "./help.ts";
 import { formatIssue, isLanguagePreference, issueFromError, languageNames } from "./i18n.ts";
 import type { Issue, LanguagePreference, TranslationKey, Translator } from "./i18n.ts";
@@ -189,6 +189,25 @@ export class LangdockSettingTab extends PluginSettingTab {
           setting.addToggle((toggle) => toggle.setDisabled(Boolean(this.syncDisabledReason()))
             .setValue(this.plugin.config.automatic)
             .onChange((automatic) => { void this.change({ automatic }); }));
+        },
+      },
+      {
+        name: t("settings.interval"),
+        desc: t("settings.intervalHelp"),
+        render: (setting) => {
+          const { automatic, syncIntervalMinutes } = this.plugin.config;
+          setting.addDropdown((dropdown) => {
+            dropdown.selectEl.setAttribute("aria-label", t("settings.interval"));
+            for (const minutes of syncIntervals) {
+              dropdown.addOption(String(minutes), t(`settings.interval.${minutes}`));
+            }
+            dropdown.setValue(String(syncIntervalMinutes))
+              .setDisabled(!automatic || Boolean(this.syncDisabledReason()))
+              .onChange((value) => {
+                const minutes = syncIntervals.find((interval) => String(interval) === value);
+                if (minutes !== undefined) void this.change({ syncIntervalMinutes: minutes });
+              });
+          });
         },
       },
       {

@@ -1,4 +1,5 @@
 import eslint from "@eslint/js";
+import obsidianmd from "eslint-plugin-obsidianmd";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
@@ -17,6 +18,14 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.node, ...globals.browser, ...globals.mocha },
       parserOptions: { projectService: true },
+    },
+  },
+  {
+    files: ["src/**/*.ts"],
+    plugins: { obsidianmd },
+    rules: {
+      ...obsidianmd.ruleConfigs.recommended,
+      ...obsidianmd.ruleConfigs.recommendedTypeChecked,
     },
   },
 );

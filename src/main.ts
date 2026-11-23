@@ -32,6 +32,7 @@ export default class LangdockSyncPlugin extends Plugin {
   private stopped = false;
   private revision = 0;
   private timer: number | undefined;
+  private intervalTimer: number | undefined;
   private retryDelay = firstRetryMs;
   private automaticJob = false;
   private automaticDue = false;
@@ -64,12 +65,14 @@ export default class LangdockSyncPlugin extends Plugin {
       this.registerEvent(vault.on("delete", (file) => this.onVaultChange(file)));
       this.registerDomEvent(window, "online", () => this.schedule(0));
       this.schedule(debounceMs);
+      this.startSyncInterval();
     });
   }
 
   override onunload(): void {
     this.stopped = true;
     this.clearTimer();
+    this.clearSyncInterval();
     this.helpDialog?.close();
     this.previewDialog?.close();
   }
@@ -186,6 +189,7 @@ export default class LangdockSyncPlugin extends Plugin {
     }
     if (!this.hasApiKey() || !isId(settings.folderId) || !settings.folders.length) settings.automatic = false;
     if (settings.folderId === previous.folderId && settings.automatic === previous.automatic
+      && settings.syncIntervalMinutes === previous.syncIntervalMinutes
       && settings.folders === previous.folders && settings.propertyFilters === previous.propertyFilters) return;
     try {
       await this.saveSettings(settings);
@@ -199,17 +203,22 @@ export default class LangdockSyncPlugin extends Plugin {
     this.retryDelay = firstRetryMs;
     this.automaticDue = false;
     this.clearTimer();
+    this.clearSyncInterval();
     try {
       await this.persist();
     } catch {
       if (this.config === settings) {
         this.config = { ...settings, automatic: false };
+        this.clearSyncInterval();
         this.status = { ...this.status, issues: [{ key: "errors.settingsSave" }] };
         this.tab?.renderStatus();
       }
       throw new SyncError("errors.settingsSave");
     }
-    if (this.config === settings) this.schedule(debounceMs);
+    if (this.config === settings) {
+      this.schedule(debounceMs);
+      this.startSyncInterval();
+    }
   }
 
   private persist(): Promise<void> {
@@ -227,6 +236,20 @@ export default class LangdockSyncPlugin extends Plugin {
   private clearTimer(): void {
     if (this.timer !== undefined) window.clearTimeout(this.timer);
     this.timer = undefined;
+  }
+
+  private clearSyncInterval(): void {
+    if (this.intervalTimer !== undefined) window.clearInterval(this.intervalTimer);
+    this.intervalTimer = undefined;
+  }
+
+  private startSyncInterval(): void {
+    const { automatic, syncIntervalMinutes } = this.config;
+    if (this.intervalTimer !== undefined || !this.ready || this.stopped || !automatic || !syncIntervalMinutes) return;
+    this.intervalTimer = window.setInterval(() => {
+      if (this.timer !== undefined || this.automaticJob || this.manualJob) return;
+      this.schedule(0);
+    }, syncIntervalMinutes * 60_000);
   }
 
   private schedule(delay: number): void {

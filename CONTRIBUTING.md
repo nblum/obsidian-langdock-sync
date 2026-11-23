@@ -13,7 +13,7 @@ Use the Node.js version pinned in `.nvmrc` (`nvm install` or `nvm use`) and inst
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Rebuild `main.js` on source changes with inline source maps. |
-| `npm run lint` | Check JavaScript and TypeScript with ESLint. |
+| `npm run lint` | Check JavaScript and TypeScript with ESLint and apply Obsidian's recommended rules to the plugin source. |
 | `npm test` | Run the fast Node.js tests. |
 | `npm run build` | Validate release metadata, check types, and build the production bundle. |
 | `npm run test:e2e` | Build the plugin and run the desktop integration suite against a local Langdock mock. |

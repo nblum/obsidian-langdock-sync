@@ -330,11 +330,13 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await expect($(".setting-item-name=Langdock connection")).toExist();
     await expect(languageSelect("Language")).toHaveValue("auto");
     if (hasSettingsSearch) {
-      await $(".setting-search-container input").setValue("Sync automatically");
-      const result = $(".vertical-tab-nav-item-title=Sync automatically");
-      await expect(result).toBeDisplayed();
-      await result.click();
-      await expect($(".setting-item-name=Sync automatically")).toBeDisplayed();
+      for (const name of ["Sync automatically", "Sync interval"]) {
+        await $(".setting-search-container input").setValue(name);
+        const result = $(`.vertical-tab-nav-item-title=${name}`);
+        await expect(result).toBeDisplayed();
+        await result.click();
+        await expect($(`.setting-item-name=${name}`)).toBeDisplayed();
+      }
     }
     await closeSettings(mainWindow);
   });
@@ -517,6 +519,41 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     const result = await state();
     expect(result.files[0]?.bytes).toBe(Buffer.from(versions[2] ?? "").toString("base64"));
     expect(mutations(result.requests).map(({ method }) => method)).toEqual(["POST"]);
+  });
+
+  it("saves an optional hourly sync and checks again without vault changes", async () => {
+    const mainWindow = await openSettings();
+    const interval = () => $('select[aria-label="Sync-Intervall"]:not([aria-hidden="true"])');
+    await expect(interval()).toBeDisabled();
+    await expect(interval()).toHaveValue("0");
+    await $(".setting-item-name=Automatisch synchronisieren").$("../..").$(".checkbox-container").click();
+    await expect(interval()).toBeEnabled();
+    await interval().selectByAttribute("value", "60");
+    await closeSettings(mainWindow);
+    await waitFor(async () => {
+      const saved = await browser.executeObsidian(async ({ plugins }) => {
+        const data = await plugins.langdockSync.loadData() as { syncIntervalMinutes?: number } | null;
+        return data?.syncIntervalMinutes;
+      });
+      return saved === 60;
+    }, "The hourly interval was not saved");
+
+    await obsidianPage.disablePlugin(pluginId);
+    const checks = async () => (await state()).requests.filter(({ path }) => path === "/knowledge/writer/list").length;
+    const before = await checks();
+    await browser.executeObsidian(() => {
+      // Run the real hourly timer on a shorter interval inside the fixture vault.
+      const browserWindow: Window = window;
+      const setInterval = browserWindow.setInterval.bind(browserWindow);
+      browserWindow.setInterval = (handler, delay, ...args: unknown[]) => {
+        if (delay !== 3_600_000) return setInterval(handler, delay, ...args);
+        browserWindow.setInterval = setInterval;
+        return setInterval(handler, 3_000, ...args);
+      };
+    });
+    await obsidianPage.enablePlugin(pluginId);
+    await waitFor(async () => await checks() >= before + 2, "The hourly timer did not sync after the startup check");
+    expect(mutations((await state()).requests)).toHaveLength(0);
   });
 
   it("aborts writes for unreadable local notes or an incomplete remote listing", async () => {
