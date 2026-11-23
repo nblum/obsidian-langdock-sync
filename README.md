@@ -10,9 +10,13 @@ Send selected Markdown notes from Obsidian to a Langdock knowledge base. Choose 
 
 Requires **Obsidian 1.12.4 or later** on desktop or mobile.
 
-[Obsidian plugin directory](https://community.obsidian.md/plugins/langdock-sync) · [Get started](#get-started) · [Filters and exclusions](#adjust-what-you-share) · [Troubleshooting](#troubleshooting)
+[Obsidian plugin directory](https://community.obsidian.md/plugins/langdock-sync) · [Get started](#get-started) · [Network use](#network-use) · [Filters and exclusions](#adjust-what-you-share) · [Troubleshooting](#troubleshooting)
 
 ![Sync preview showing a new Launch notes upload, a Support guide update, and removal of an older FAQ copy](assets/screenshots/preview.webp)
+
+## Network use
+
+Langdock Sync requires a Langdock workspace and sends HTTPS requests to the Langdock Knowledge Folder API at `api.langdock.com`. It uses your workspace API key to list accessible knowledge bases, compare local notes with copies in the selected knowledge base, and check indexing status. Sync uploads the full Markdown content of eligible notes, including their YAML properties, and removes managed copies when needed.
 
 ## Get started
 
@@ -46,7 +50,7 @@ audience: team
 The new help center is available to all customers.
 ```
 
-Langdock receives the full Markdown file, including its Properties. The two valid classifications are `public` and `internal`. Each synced note needs a single classification, even if you remove all property filters.
+The two valid classifications are `public` and `internal`. Each synced note needs a single classification, even if you remove all property filters.
 
 ![Manage folders and Manage properties with the Knowledge folder and the default public classification filter](assets/screenshots/filters.webp)
 
