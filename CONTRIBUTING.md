@@ -1,5 +1,13 @@
 # Contributing to Langdock Sync
 
+## Shared plugin rules
+
+Read the shared Obsidian plugin checklist before working on the plugin. Store the absolute path to the rules note on one line in `.obsidian-plugin-rules` at the repository root. Git ignores this local file. If the reference is missing or the note is inaccessible, ask the user for the note's location.
+
+Add rules that apply across Obsidian plugins to the shared note. Document Langdock Sync-specific practices in this repository.
+
+## Development
+
 Use the Node.js version pinned in `.nvmrc` (`nvm install` or `nvm use`) and install the locked dependencies with `npm ci`. CI and the release workflow read the same version file.
 
 | Command | Purpose |
@@ -30,11 +38,17 @@ The capture suite defaults to Obsidian 1.15.1 with a 1280 × 900 viewport, the l
 
 To add a capture, register its filename and caption in `tests/e2e/screenshot-assets.json` and capture the corresponding UI state in `tests/e2e/documentation.capture.ts`.
 
+## Teaser artwork
+
+The shared checklist defines the teaser layout and visual identity. Keep the 4:3 vector artwork in `assets/teaser/teaser.svg` with all lettering converted to paths. Export the same artwork as `teaser.png` at 480 × 360, `teaser@2x.png` at 960 × 720, and `teaser@3x.png` at 1440 × 1080. Check the legibility of the 480 × 360 image at actual size.
+
 ## Translations
 
 Add visible strings to every JSON dictionary in `locales/`. Keep message keys and placeholders aligned across languages. Use structured issue keys for sync and API errors so the settings can translate saved status messages after a language change.
 
 ## Releases
+
+Read the full [shared plugin checklist](#shared-plugin-rules) for each release. Complete the applicable pre-release requirements before publishing and perform the checklist's post-release checks afterward.
 
 1. Record user-visible changes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
 2. Run `npm run release:prepare -- <version>` to update the manifest, package files, compatibility map, and changelog for each new version. The initial `0.1.0` already has its metadata and changelog section. If the minimum Obsidian version changes, update the manifest, the new version's entry in `versions.json`, and the CI matrix.

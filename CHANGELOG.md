@@ -16,4 +16,5 @@
 - Add a guided introduction on first use and an About dialog. Show plugin details at the top of settings, followed by the language picker and both dialog buttons. The command palette can also open either dialog.
 - Link to the Langdock workspace API settings and show the required Knowledge Folder API permission next to the API key field.
 - Add an opt-in screenshot suite and gallery for refreshing the documentation images.
+- Add a Langdock Sync teaser with an example of a classified note synced to a knowledge base.
 - Require Obsidian 1.12.4 for SecretStorage, including its Linux keychain fixes.

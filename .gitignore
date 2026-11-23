@@ -1,6 +1,7 @@
 /node_modules/
 /main.js
 /data.json
+/.obsidian-plugin-rules
 .obsidian/
 !/tests/e2e/documentation-vault/.obsidian/
 /tests/e2e/documentation-vault/.obsidian/*

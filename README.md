@@ -2,6 +2,8 @@
 
 Langdock Sync gleicht freigegebene Markdown-Notizen aus einem Obsidian-Vault mit einer ausgewählten Langdock-Wissensdatenbank ab. Es arbeitet mit gespeicherten Dateien im Vault, einschließlich lokaler Notizen ohne Git-Commit. Classificator und Langdock Sync sind eigenständige Plugins. Beide verwenden dieselbe YAML-Eigenschaft `classification`.
 
+![Langdock Sync von Nico Blum zeigt den Abgleich einer freigegebenen Obsidian-Notiz mit der Langdock-Wissensdatenbank Product handbook.](assets/teaser/teaser.png)
+
 ## Installation
 
 1. Verwende Obsidian **1.12.4** oder neuer. Entpacke den Build so, dass `main.js`, `manifest.json` und `styles.css` unter `.obsidian/plugins/langdock-sync/` im Vault liegen. Lade Obsidian neu und aktiviere **Langdock Sync** unter **Community-Plugins**.
