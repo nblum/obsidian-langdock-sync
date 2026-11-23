@@ -1,0 +1,9 @@
+{
+  "id": "langdock-sync",
+  "name": "Langdock Sync",
+  "version": "0.1.0",
+  "minAppVersion": "1.12.4",
+  "description": "Sync Obsidian notes with Langdock.",
+  "author": "Nico Blum",
+  "isDesktopOnly": false
+}

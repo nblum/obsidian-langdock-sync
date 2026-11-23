@@ -1,0 +1,73 @@
+.langdock-sync-message {
+  --langdock-message-accent: var(--color-blue);
+  margin: var(--size-4-2) 0;
+  padding: var(--size-4-2) var(--size-4-3);
+  border-inline-start: var(--size-4-1) solid var(--langdock-message-accent);
+  border-radius: var(--radius-s);
+  background-color: var(--background-secondary);
+  background-color: color-mix(in srgb, var(--langdock-message-accent) 12%, var(--background-primary));
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.langdock-sync-message--success {
+  --langdock-message-accent: var(--color-green);
+}
+
+.langdock-sync-message--error {
+  --langdock-message-accent: var(--color-red);
+}
+
+.langdock-sync-controls .setting-item-control {
+  flex-wrap: wrap;
+}
+
+.langdock-sync-help {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  margin: 0 var(--size-4-4) var(--size-4-3);
+}
+
+.langdock-sync-dialog-actions,
+.langdock-sync-about-meta,
+.langdock-sync-about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2) var(--size-4-3);
+}
+
+.langdock-sync-dialog-actions {
+  align-items: center;
+  justify-content: flex-end;
+  margin-block-start: var(--size-4-4);
+}
+
+.langdock-sync-introduction-progress {
+  margin-inline-end: auto;
+}
+
+.langdock-sync-introduction-progress,
+.langdock-sync-about-meta {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.langdock-sync-about-links {
+  padding-inline-start: 0;
+  list-style-type: none;
+}
+
+.langdock-sync-settings-header {
+  margin-block-end: var(--size-4-4);
+}
+
+.langdock-sync-settings-header h2 {
+  margin-block: 0 var(--size-4-2);
+}
+
+.langdock-sync-settings-header p,
+.langdock-sync-settings-header ul {
+  margin-block: var(--size-4-2);
+}
