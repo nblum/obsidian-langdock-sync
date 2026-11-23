@@ -12,7 +12,7 @@
 
 - Refresh the connection, filters, sync status, and About screenshots for 0.1.1.
 - Rewrite the README with quick links, installation from Community plugins, a first-sync walkthrough, and troubleshooting.
-- Document the Langdock API requests and the note content sent during sync.
+- Disclose that Langdock Sync uses the Langdock Knowledge Folder API (`api.langdock.com`) to compare notes, check indexing status, and sync the full Markdown content of eligible notes, including their YAML properties.
 
 ## [0.1.1] - 2026-11-23
 
