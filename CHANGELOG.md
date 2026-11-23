@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-23
+
+### Fixed
+
+- Make Langdock Sync controls discoverable in Obsidian settings search on 1.13.0 and later.
+- Use native settings headings and clean up the plugin description and status styles for the Community Directory review.
+- Keep waiting for Langdock to finish indexing if the settings pop-out closes.
+- Explain which setup step is needed when Preview and Sync now are disabled.
+- Open the preview dialog immediately and show progress while preparing the sync plan.
+
 ## [0.1.0]
 
 ### Added

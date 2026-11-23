@@ -55,7 +55,7 @@ async function captureSettings(filename: string, first: string, last: string): P
     const rows = Array.from(root?.children ?? []);
     const start = rows.find((row) => row.querySelector(".setting-item-name")?.textContent === firstRef);
     const end = rows.find((row) => lastRef.startsWith(".")
-      ? row.matches(lastRef)
+      ? row.matches(lastRef) || row.querySelector(lastRef)
       : row.querySelector(".setting-item-name")?.textContent === lastRef);
     if (!start || !end) throw new Error(`Settings range missing: ${firstRef} / ${lastRef}`);
 

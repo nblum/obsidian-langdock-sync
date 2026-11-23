@@ -1,9 +1,9 @@
 {
   "id": "langdock-sync",
   "name": "Langdock Sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.12.4",
-  "description": "Sync Obsidian notes with Langdock.",
+  "description": "Sync approved Markdown notes with a Langdock knowledge base.",
   "author": "Nico Blum",
   "isDesktopOnly": false
 }

@@ -5,11 +5,16 @@
   border-inline-start: var(--size-4-1) solid var(--langdock-message-accent);
   border-radius: var(--radius-s);
   background-color: var(--background-secondary);
-  background-color: color-mix(in srgb, var(--langdock-message-accent) 12%, var(--background-primary));
   color: var(--text-normal);
   font-size: var(--font-ui-small);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+@supports (background-color: color-mix(in srgb, black, white)) {
+  .langdock-sync-message {
+    background-color: color-mix(in srgb, var(--langdock-message-accent) 12%, var(--background-primary));
+  }
 }
 
 .langdock-sync-message--success {
@@ -18,6 +23,12 @@
 
 .langdock-sync-message--error {
   --langdock-message-accent: var(--color-red);
+}
+
+.langdock-sync-preview-progress {
+  display: block;
+  width: 100%;
+  margin-block-start: var(--size-4-2);
 }
 
 .langdock-sync-controls .setting-item-control {
@@ -63,8 +74,15 @@
   margin-block-end: var(--size-4-4);
 }
 
-.langdock-sync-settings-header h2 {
-  margin-block: 0 var(--size-4-2);
+.langdock-sync-content-row.setting-item {
+  display: block;
+  padding: 0;
+  border: 0;
+}
+
+.langdock-sync-content-row > .setting-item-info,
+.langdock-sync-content-row > .setting-item-control {
+  display: none;
 }
 
 .langdock-sync-settings-header p,

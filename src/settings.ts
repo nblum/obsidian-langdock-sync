@@ -1,9 +1,10 @@
-import { Modal, PluginSettingTab, Setting } from "obsidian";
-import type { App } from "obsidian";
+import { Modal, PluginSettingTab, requireApiVersion, Setting } from "obsidian";
+import type { App, SettingDefinitionRender } from "obsidian";
 import { isVisiblePath } from "./config.ts";
 import { renderAbout } from "./help.ts";
 import { formatIssue, isLanguagePreference, issueFromError, languageNames } from "./i18n.ts";
 import type { Issue, LanguagePreference, TranslationKey, Translator } from "./i18n.ts";
+import { isId } from "./langdock.ts";
 import type { Folder } from "./langdock.ts";
 import type LangdockSyncPlugin from "./main.ts";
 import type { Plan } from "./sync.ts";
@@ -31,6 +32,30 @@ function appendLinkedHelp(help: HTMLElement, text: string, label: string, href: 
   help.append(after);
 }
 
+type SettingsRow = Pick<SettingDefinitionRender, "name" | "desc" | "aliases" | "searchable"> & {
+  render: (setting: Setting) => void | (() => void);
+};
+
+function heading(name: string): SettingsRow {
+  return { name, render: (setting) => { setting.setHeading(); } };
+}
+
+function contentRow(render: (container: HTMLElement) => void): SettingsRow {
+  return {
+    name: "",
+    searchable: false,
+    render: (setting) => {
+      setting.setClass("langdock-sync-content-row");
+      const content = setting.settingEl.createDiv();
+      render(content);
+      return () => {
+        content.remove();
+        setting.settingEl.removeClass("langdock-sync-content-row");
+      };
+    },
+  };
+}
+
 export class LangdockSettingTab extends PluginSettingTab {
   private targets: Folder[] = [];
   private statusEl?: HTMLElement;
@@ -43,196 +68,280 @@ export class LangdockSettingTab extends PluginSettingTab {
     super(plugin.app, plugin);
   }
 
-  override display(): void {
-    this.open = true;
-    const { containerEl } = this;
-    const { config: settings, translate: t } = this.plugin;
-    const hasApiKey = !this.changingKey && this.plugin.hasApiKey();
-    containerEl.empty();
-
-    const { manifest } = this.plugin;
-    const header = containerEl.createEl("header", { cls: "langdock-sync-settings-header" });
-    header.createEl("h2", { text: manifest.name });
-    renderAbout(header, t, manifest);
-
-    new Setting(containerEl)
-      .setName(t("language.label"))
-      .setDesc(t("language.help"))
-      .addDropdown((dropdown) => {
-        dropdown.selectEl.setAttribute("aria-label", t("language.label"));
-        dropdown.addOption("auto", t("language.auto"))
-          .addOptions(languageNames)
-          .setValue(this.plugin.languagePreference)
-          .setDisabled(this.changingKey)
-          .onChange((value) => {
-            if (isLanguagePreference(value)) void this.changeLanguage(value);
+  override getSettingDefinitions(): SettingsRow[] {
+    const { manifest, translate: t } = this.plugin;
+    const connectionMessage = this.connectionMessage;
+    return [
+      {
+        name: manifest.name,
+        searchable: false,
+        render: (setting) => {
+          setting.setClass("langdock-sync-settings-header").setHeading();
+          renderAbout(setting.descEl, t, manifest);
+        },
+      },
+      {
+        name: t("language.label"),
+        desc: t("language.help"),
+        render: (setting) => {
+          setting.addDropdown((dropdown) => {
+            dropdown.selectEl.setAttribute("aria-label", t("language.label"));
+            dropdown.addOption("auto", t("language.auto"))
+              .addOptions(languageNames)
+              .setValue(this.plugin.languagePreference)
+              .setDisabled(this.changingKey)
+              .onChange((value) => {
+                if (isLanguagePreference(value)) void this.changeLanguage(value);
+              });
           });
-      });
-
-    new Setting(containerEl).setClass("langdock-sync-controls")
-      .addButton((button) => button.setButtonText(t("commands.showIntroduction"))
-        .onClick(() => { this.plugin.showIntroduction(); }))
-      .addButton((button) => button.setButtonText(t("commands.showAbout"))
-        .onClick(() => { this.plugin.showAbout(); }));
-
-    new Setting(containerEl).setName(t("settings.connection")).setHeading();
-    let keyInput: HTMLInputElement;
-    new Setting(containerEl)
-      .setName(t("settings.apiKey"))
-      .setDesc(hasApiKey ? t("settings.keySet") : t("settings.keyStorage"))
-      .addText((input) => {
-        keyInput = input.inputEl;
-        keyInput.type = "password";
-        keyInput.autocomplete = "off";
-        keyInput.setAttribute("aria-label", t("settings.apiKey"));
-        input.setDisabled(this.changingKey);
-      })
-      .addButton((button) => button.setButtonText(t("settings.saveKey"))
-        .setDisabled(this.changingKey)
-        .onClick(() => { void this.saveApiKey(keyInput.value); }));
-
-    appendLinkedHelp(
-      containerEl.createEl("p", { cls: "langdock-sync-help" }),
-      t("settings.workspaceKeyHelp", { scope: "KNOWLEDGE_FOLDER_API" }),
-      t("settings.workspaceApiLink"),
-      "https://app.langdock.com/settings/workspace/products/api",
-    );
-
-    new Setting(containerEl)
-      .setName(t("settings.knowledgeBase"))
-      .setDesc(t("settings.editorHelp"))
-      .addDropdown((dropdown) => {
-        dropdown.selectEl.setAttribute("aria-label", t("settings.knowledgeBase"));
-        dropdown.addOption("", t("settings.select"));
-        if (settings.folderId && !this.targets.some(({ id }) => id === settings.folderId)) {
-          dropdown.addOption(settings.folderId, t("settings.savedTarget", { id: settings.folderId }));
-          dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
-        }
-        for (const folder of this.targets) {
-          dropdown.addOption(folder.id, folder.role === "EDITOR" ? folder.name : t("settings.readOnlyTarget", { name: folder.name }));
-          if (folder.role !== "EDITOR") {
-            dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
-          }
-        }
-        dropdown.setDisabled(this.changingKey).setValue(settings.folderId).onChange((folderId) => {
-          if (folderId && !this.targets.some(({ id, role }) => id === folderId && role === "EDITOR")) return;
-          this.request++;
-          this.connectionMessage = null;
-          void this.change({ folderId });
-        });
-      });
-
-    new Setting(containerEl).setClass("langdock-sync-controls")
-      .addButton((button) => button.setButtonText(t("settings.loadTargets"))
-        .setDisabled(!hasApiKey)
-        .onClick(() => { void this.refreshFolders(false); }))
-      .addButton((button) => button.setButtonText(t("settings.testConnection"))
-        .setDisabled(!hasApiKey)
-        .onClick(() => { void this.refreshFolders(true); }));
-
-    if (this.connectionMessage) {
-      const { key, tone, variables } = this.connectionMessage;
-      renderMessage(containerEl, { text: t(key, variables), tone }).setAttribute("role", "status");
-    }
-
-    this.renderScope();
-    const canSync = hasApiKey && !!settings.folderId && settings.folders.length > 0;
-    new Setting(containerEl)
-      .setName(t("settings.automatic"))
-      .setDesc(t("settings.automaticHelp"))
-      .addToggle((toggle) => toggle.setDisabled(!canSync)
-        .setValue(settings.automatic)
-        .onChange((automatic) => { void this.change({ automatic }); }));
-
-    new Setting(containerEl)
-      .setName(t("settings.sync"))
-      .addButton((button) => button.setButtonText(t("settings.preview")).setDisabled(!canSync)
-        .onClick(() => { void this.plugin.showPreview(); }))
-      .addButton((button) => button.setButtonText(t("commands.syncNow")).setCta().setDisabled(!canSync)
-        .onClick(() => { void this.plugin.syncNow(); }));
-
-    this.statusEl = containerEl.createDiv({ cls: "langdock-sync-status", attr: { role: "status" } });
-    this.renderStatus();
+        },
+      },
+      {
+        name: t("commands.showIntroduction"),
+        aliases: [t("commands.showAbout")],
+        render: (setting) => {
+          setting.setName("").setClass("langdock-sync-controls")
+            .addButton((button) => button.setButtonText(t("commands.showIntroduction"))
+              .onClick(() => { this.plugin.showIntroduction(); }))
+            .addButton((button) => button.setButtonText(t("commands.showAbout"))
+              .onClick(() => { this.plugin.showAbout(); }));
+        },
+      },
+      heading(t("settings.connection")),
+      {
+        name: t("settings.apiKey"),
+        desc: t("settings.keyStorage"),
+        aliases: [t("settings.saveKey")],
+        render: (setting) => {
+          let keyInput: HTMLInputElement;
+          setting.setDesc(this.hasUsableKey() ? t("settings.keySet") : t("settings.keyStorage"))
+            .addText((input) => {
+              keyInput = input.inputEl;
+              keyInput.type = "password";
+              keyInput.autocomplete = "off";
+              keyInput.setAttribute("aria-label", t("settings.apiKey"));
+              input.setDisabled(this.changingKey);
+            })
+            .addButton((button) => button.setButtonText(t("settings.saveKey"))
+              .setDisabled(this.changingKey)
+              .onClick(() => { void this.saveApiKey(keyInput.value); }));
+        },
+      },
+      contentRow((container) => {
+        appendLinkedHelp(
+          container.createEl("p", { cls: "langdock-sync-help" }),
+          t("settings.workspaceKeyHelp", { scope: "KNOWLEDGE_FOLDER_API" }),
+          t("settings.workspaceApiLink"),
+          "https://app.langdock.com/settings/workspace/products/api",
+        );
+      }),
+      {
+        name: t("settings.knowledgeBase"),
+        desc: t("settings.editorHelp"),
+        render: (setting) => {
+          const { folderId } = this.plugin.config;
+          setting.addDropdown((dropdown) => {
+            dropdown.selectEl.setAttribute("aria-label", t("settings.knowledgeBase"));
+            dropdown.addOption("", t("settings.select"));
+            if (folderId && !this.targets.some(({ id }) => id === folderId)) {
+              dropdown.addOption(folderId, t("settings.savedTarget", { id: folderId }));
+              dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
+            }
+            for (const folder of this.targets) {
+              dropdown.addOption(folder.id, folder.role === "EDITOR" ? folder.name : t("settings.readOnlyTarget", { name: folder.name }));
+              if (folder.role !== "EDITOR") {
+                dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
+              }
+            }
+            dropdown.setDisabled(this.changingKey).setValue(folderId).onChange((nextFolderId) => {
+              if (nextFolderId && !this.targets.some(({ id, role }) => id === nextFolderId && role === "EDITOR")) return;
+              this.request++;
+              this.connectionMessage = null;
+              void this.change({ folderId: nextFolderId });
+            });
+          });
+        },
+      },
+      {
+        name: t("settings.loadTargets"),
+        aliases: [t("settings.testConnection")],
+        render: (setting) => {
+          const hasApiKey = this.hasUsableKey();
+          setting.setName("").setClass("langdock-sync-controls")
+            .addButton((button) => button.setButtonText(t("settings.loadTargets"))
+              .setDisabled(!hasApiKey)
+              .onClick(() => { void this.refreshFolders(false); }))
+            .addButton((button) => button.setButtonText(t("settings.testConnection"))
+              .setDisabled(!hasApiKey)
+              .onClick(() => { void this.refreshFolders(true); }));
+        },
+      },
+      ...(connectionMessage ? [contentRow((container) => {
+        const { key, tone, variables } = connectionMessage;
+        renderMessage(container, { text: t(key, variables), tone }).setAttribute("role", "status");
+      })] : []),
+      ...this.folderDefinitions(t),
+      ...this.propertyDefinitions(t),
+      {
+        name: t("settings.automatic"),
+        desc: t("settings.automaticHelp"),
+        render: (setting) => {
+          setting.addToggle((toggle) => toggle.setDisabled(Boolean(this.syncDisabledReason()))
+            .setValue(this.plugin.config.automatic)
+            .onChange((automatic) => { void this.change({ automatic }); }));
+        },
+      },
+      {
+        name: t("settings.sync"),
+        aliases: [t("settings.preview"), t("commands.syncNow")],
+        render: (setting) => {
+          const reason = this.syncDisabledReason();
+          setting.setDesc(reason ? t(reason) : "")
+            .addButton((button) => button.setButtonText(t("settings.preview")).setDisabled(Boolean(reason))
+              .onClick(() => { void this.plugin.showPreview(); }))
+            .addButton((button) => button.setButtonText(t("commands.syncNow")).setCta().setDisabled(Boolean(reason))
+              .onClick(() => { void this.plugin.syncNow(); }));
+        },
+      },
+      contentRow((container) => {
+        this.open = true;
+        this.statusEl = container.createDiv({ cls: "langdock-sync-status", attr: { role: "status" } });
+        this.renderStatus();
+      }),
+    ];
   }
 
-  private renderScope(): void {
-    const { containerEl } = this;
-    const { folders, propertyFilters } = this.plugin.config;
-    const t = this.plugin.translate;
-    const available = ["/", ...this.app.vault.getAllFolders(false).map(({ path }) => path)
+  private hasUsableKey(): boolean {
+    return !this.changingKey && this.plugin.hasApiKey();
+  }
+
+  private syncDisabledReason(): TranslationKey | undefined {
+    const { folderId, folders } = this.plugin.config;
+    if (this.changingKey) return "settings.keySaving";
+    if (!this.plugin.hasApiKey()) return "errors.keyMissing";
+    if (!isId(folderId)) return "errors.targetRequired";
+    if (!folders.length) return "errors.folderRequired";
+    return undefined;
+  }
+
+  private availableFolders(): string[] {
+    return ["/", ...this.app.vault.getAllFolders(false).map(({ path }) => path)
       .filter(isVisiblePath).sort((left, right) => left.localeCompare(right))];
+  }
+
+  private folderDefinitions(t: Translator): SettingsRow[] {
+    const { folders } = this.plugin.config;
     const folderName = (path: string) => path === "/" ? t("settings.vaultRoot") : path;
+    return [
+      heading(t("settings.manageFolders")),
+      contentRow((container) => {
+        container.createEl("p", { cls: "langdock-sync-help", text: t("settings.foldersHelp") });
+      }),
+      {
+        name: t("settings.folderPicker"),
+        aliases: [t("settings.addFolder")],
+        render: (setting) => {
+          setting.setName("").addDropdown((dropdown) => {
+            dropdown.selectEl.setAttribute("aria-label", t("settings.folderPicker"));
+            dropdown.addOption("", t("settings.addFolder"));
+            for (const path of this.availableFolders()) {
+              if (!folders.includes(path)) dropdown.addOption(path, folderName(path));
+            }
+            dropdown.setDisabled(this.changingKey).onChange((path) => {
+              if (path) void this.change({ folders: [...folders, path] });
+            });
+          });
+        },
+      },
+      ...folders.map((path): SettingsRow => ({
+        name: "",
+        searchable: false,
+        render: (setting) => {
+          const label = folderName(path);
+          setting.setName(label);
+          if (path !== "/" && !this.app.vault.getFolderByPath(path)) setting.setDesc(t("settings.folderMissing"));
+          setting.addExtraButton((button) => button.setIcon("x").setTooltip(t("settings.removeFolder", { name: label }))
+            .setDisabled(this.changingKey)
+            .onClick(() => { void this.change({ folders: folders.filter((folder) => folder !== path) }); }));
+        },
+      })),
+    ];
+  }
 
-    new Setting(containerEl).setName(t("settings.manageFolders")).setHeading();
-    containerEl.createEl("p", {
-      cls: "langdock-sync-help",
-      text: t("settings.foldersHelp"),
-    });
-    new Setting(containerEl)
-      .addDropdown((dropdown) => {
-        dropdown.selectEl.setAttribute("aria-label", t("settings.folderPicker"));
-        dropdown.addOption("", t("settings.addFolder"));
-        for (const path of available) {
-          if (!folders.includes(path)) dropdown.addOption(path, folderName(path));
+  private propertyDefinitions(t: Translator): SettingsRow[] {
+    const { propertyFilters } = this.plugin.config;
+    return [
+      heading(t("settings.manageProperties")),
+      contentRow((container) => {
+        const help = container.createEl("p", { cls: "langdock-sync-help" });
+        help.createEl("strong", { text: t("settings.propertiesLogic") });
+        help.createEl("br");
+        for (const [index, part] of t("settings.propertiesExample").split("`").entries()) {
+          if (index % 2 === 0) help.append(part);
+          else help.createEl("code", { text: part });
         }
-        dropdown.setDisabled(this.changingKey).onChange((path) => {
-          if (path) void this.change({ folders: [...folders, path] });
-        });
-      });
-    for (const path of folders) {
-      const row = new Setting(containerEl).setName(folderName(path));
-      if (!available.includes(path)) row.setDesc(t("settings.folderMissing"));
-      row.addExtraButton((button) => button.setIcon("x").setTooltip(t("settings.removeFolder", { name: folderName(path) }))
-        .setDisabled(this.changingKey)
-        .onClick(() => { void this.change({ folders: folders.filter((folder) => folder !== path) }); }));
-    }
+        help.createEl("br");
+        appendLinkedHelp(help, t("settings.propertiesHelp"), "Classificator", "https://github.com/nblum/obsidian-classificator");
+      }),
+      {
+        name: t("settings.addFilter"),
+        aliases: [t("settings.propertyLabel"), t("settings.valueLabel")],
+        render: (setting) => {
+          let propertyInput: HTMLInputElement;
+          let valueInput: HTMLInputElement;
+          setting.setName("").setClass("langdock-sync-controls")
+            .addText((input) => {
+              propertyInput = input.inputEl;
+              propertyInput.setAttribute("aria-label", t("settings.propertyLabel"));
+              input.setPlaceholder(t("settings.propertyPlaceholder")).setDisabled(this.changingKey);
+            })
+            .addText((input) => {
+              valueInput = input.inputEl;
+              valueInput.setAttribute("aria-label", t("settings.valueLabel"));
+              input.setPlaceholder(t("settings.valuePlaceholder")).setDisabled(this.changingKey);
+            })
+            .addButton((button) => button.setButtonText(t("settings.addFilter"))
+              .setDisabled(this.changingKey)
+              .onClick(() => {
+                const property = propertyInput.value.trim();
+                const value = valueInput.value.trim();
+                if (!property || !value) {
+                  this.plugin.notify(t("errors.propertyRequired"));
+                  return;
+                }
+                if (propertyFilters.some((filter) => filter.property === property && filter.value === value)) return;
+                void this.change({ propertyFilters: [...propertyFilters, { property, value }] });
+              }));
+        },
+      },
+      ...propertyFilters.map((filter): SettingsRow => ({
+        name: "",
+        searchable: false,
+        render: (setting) => {
+          const label = `${filter.property} = ${filter.value}`;
+          setting.setName(label)
+            .addExtraButton((button) => button.setIcon("x").setTooltip(t("settings.removeFilter", { rule: label }))
+              .setDisabled(this.changingKey)
+              .onClick(() => { void this.change({ propertyFilters: propertyFilters.filter((entry) => entry !== filter) }); }));
+        },
+      })),
+    ];
+  }
 
-    new Setting(containerEl).setName(t("settings.manageProperties")).setHeading();
-    const propertyHelp = containerEl.createEl("p", { cls: "langdock-sync-help" });
-    propertyHelp.createEl("strong", { text: t("settings.propertiesLogic") });
-    propertyHelp.createEl("br");
-    for (const [index, part] of t("settings.propertiesExample").split("`").entries()) {
-      if (index % 2 === 0) propertyHelp.append(part);
-      else propertyHelp.createEl("code", { text: part });
-    }
-    propertyHelp.createEl("br");
-    appendLinkedHelp(
-      propertyHelp,
-      t("settings.propertiesHelp"),
-      "Classificator",
-      "https://github.com/nblum/obsidian-classificator",
-    );
-    let propertyInput: HTMLInputElement;
-    let valueInput: HTMLInputElement;
-    new Setting(containerEl).setClass("langdock-sync-controls")
-      .addText((input) => {
-        propertyInput = input.inputEl;
-        propertyInput.setAttribute("aria-label", t("settings.propertyLabel"));
-        input.setPlaceholder(t("settings.propertyPlaceholder")).setDisabled(this.changingKey);
-      })
-      .addText((input) => {
-        valueInput = input.inputEl;
-        valueInput.setAttribute("aria-label", t("settings.valueLabel"));
-        input.setPlaceholder(t("settings.valuePlaceholder")).setDisabled(this.changingKey);
-      })
-      .addButton((button) => button.setButtonText(t("settings.addFilter"))
-        .setDisabled(this.changingKey)
-        .onClick(() => {
-          const property = propertyInput.value.trim();
-          const value = valueInput.value.trim();
-          if (!property || !value) {
-            this.plugin.notify(t("errors.propertyRequired"));
-            return;
-          }
-          if (propertyFilters.some((filter) => filter.property === property && filter.value === value)) return;
-          void this.change({ propertyFilters: [...propertyFilters, { property, value }] });
-        }));
-    for (const filter of propertyFilters) {
-      const label = `${filter.property} = ${filter.value}`;
-      new Setting(containerEl).setName(label)
-        .addExtraButton((button) => button.setIcon("x").setTooltip(t("settings.removeFilter", { rule: label }))
-          .setDisabled(this.changingKey)
-          .onClick(() => { void this.change({ propertyFilters: propertyFilters.filter((entry) => entry !== filter) }); }));
+  // Obsidian 1.12 calls display(); newer versions render the same definitions directly.
+  override display(): void {
+    this.renderLegacySettings();
+  }
+
+  refreshSettings(): void {
+    if (requireApiVersion("1.13.0")) this.update();
+    else if (this.open) this.renderLegacySettings();
+  }
+
+  private renderLegacySettings(): void {
+    this.containerEl.empty();
+    for (const { name, desc, render } of this.getSettingDefinitions()) {
+      render(new Setting(this.containerEl).setName(name).setDesc(desc ?? ""));
     }
   }
 
@@ -262,7 +371,6 @@ export class LangdockSettingTab extends PluginSettingTab {
     } catch (error) {
       this.plugin.notify(formatIssue(this.plugin.translate, issueFromError(error)));
     }
-    if (this.open) this.display();
   }
 
   private async changeLanguage(preference: LanguagePreference): Promise<void> {
@@ -271,7 +379,7 @@ export class LangdockSettingTab extends PluginSettingTab {
     } catch (error) {
       this.plugin.notify(formatIssue(this.plugin.translate, issueFromError(error)));
     }
-    if (this.open) this.display();
+    this.refreshSettings();
   }
 
   private async saveApiKey(value: string): Promise<void> {
@@ -284,7 +392,7 @@ export class LangdockSettingTab extends PluginSettingTab {
     this.request++;
     this.targets = [];
     this.connectionMessage = null;
-    this.display();
+    this.refreshSettings();
     try {
       await this.plugin.updateApiKey(value);
     } catch (error) {
@@ -295,14 +403,14 @@ export class LangdockSettingTab extends PluginSettingTab {
       this.changingKey = false;
     }
     if (!this.open) return;
-    if (this.connectionMessage) this.display();
+    if (this.connectionMessage) this.refreshSettings();
     else await this.refreshFolders(false);
   }
 
   private async refreshFolders(test: boolean): Promise<void> {
     const request = ++this.request;
     this.connectionMessage = { key: "status.connecting", tone: "info" };
-    this.display();
+    this.refreshSettings();
     try {
       const folders = await this.plugin.discoverFolders(test);
       if (!this.open || this.request !== request) return;
@@ -317,19 +425,29 @@ export class LangdockSettingTab extends PluginSettingTab {
       this.targets = [];
       this.connectionMessage = { ...issueFromError(error), tone: "error" };
     }
-    this.display();
+    this.refreshSettings();
   }
 }
 
 export class PreviewModal extends Modal {
-  constructor(app: App, private readonly plan: Plan, private readonly translate: Translator) {
+  constructor(app: App, private readonly translate: Translator) {
     super(app);
   }
 
   override onOpen(): void {
+    this.modalEl.addClass("langdock-sync-preview");
+    this.setTitle(this.translate("preview.title"));
+    const loading = renderMessage(this.contentEl, { text: this.translate("preview.loading"), tone: "info" });
+    loading.setAttribute("role", "status");
+    loading.createEl("progress", {
+      cls: "langdock-sync-preview-progress",
+      attr: { "aria-hidden": "true" },
+    });
+  }
+
+  showPlan({ transfers, removals }: Plan): void {
     const t = this.translate;
-    this.setTitle(t("preview.title"));
-    const { transfers, removals } = this.plan;
+    this.contentEl.empty();
     if (!transfers.length && !removals.length) {
       this.contentEl.createEl("p", { text: t("preview.empty") });
       return;
@@ -343,6 +461,12 @@ export class PreviewModal extends Modal {
     for (const { file, path } of removals) {
       list.createEl("li", { text: path ? t("preview.deleteOld", { path }) : t("preview.delete", { name: file.name }) });
     }
+  }
+
+  showError(issue: Issue): void {
+    this.contentEl.empty();
+    renderMessage(this.contentEl, { text: formatIssue(this.translate, issue), tone: "error" })
+      .setAttribute("role", "alert");
   }
 
   override onClose(): void {

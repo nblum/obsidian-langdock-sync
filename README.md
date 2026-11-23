@@ -1,47 +1,47 @@
 # Langdock Sync
 
-Langdock Sync gleicht freigegebene Markdown-Notizen aus einem Obsidian-Vault mit einer ausgewählten Langdock-Wissensdatenbank ab. Es arbeitet mit gespeicherten Dateien im Vault, einschließlich lokaler Notizen ohne Git-Commit. Classificator und Langdock Sync sind eigenständige Plugins. Beide verwenden dieselbe YAML-Eigenschaft `classification`.
+Langdock Sync syncs approved Markdown notes from an Obsidian vault with a selected Langdock knowledge base. It uses files saved in the vault, including local notes that have never been committed to Git. Classificator and Langdock Sync are separate plugins that share the YAML property `classification`.
 
-![Langdock Sync von Nico Blum zeigt den Abgleich einer freigegebenen Obsidian-Notiz mit der Langdock-Wissensdatenbank Product handbook.](assets/teaser/teaser.png)
+![Langdock Sync by Nico Blum shows an approved Obsidian note syncing to the Product handbook knowledge base in Langdock.](assets/teaser/teaser.png)
 
 ## Installation
 
-1. Verwende Obsidian **1.12.4** oder neuer. Entpacke den Build so, dass `main.js`, `manifest.json` und `styles.css` unter `.obsidian/plugins/langdock-sync/` im Vault liegen. Lade Obsidian neu und aktiviere **Langdock Sync** unter **Community-Plugins**.
-2. Erstelle in den Langdock-API-Einstellungen einen Workspace-API-Key mit dem Scope `KNOWLEDGE_FOLDER_API` und gib ihm die Rolle **Editor** in der gewünschten Wissensdatenbank. Hinterlege den Key unter **Einstellungen → Langdock Sync**. **Key speichern** legt ihn in Obsidian SecretStorage unter der festen ID `langdock-api` ab. [Langdock-API-Einstellungen](https://app.langdock.com/settings/workspace/products/api) · [Obsidian SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage) · [Langdock Knowledge Folder API](https://docs.langdock.com/en/developer/knowledge-folder-api/knowledge-folder-overview)
-3. Lade die Wissensdatenbanken, wähle das Ziel und klicke auf **Verbindung testen**.
-4. Wähle unter **Ordner verwalten** mindestens einen Ordner. Prüfe die **Vorschau** und starte **Jetzt synchronisieren**. **Automatisch synchronisieren** ist anfangs aus.
+1. Use Obsidian **1.12.4** or newer. Extract the build so that `main.js`, `manifest.json`, and `styles.css` are under `.obsidian/plugins/langdock-sync/` in the vault. Reload Obsidian and enable **Langdock Sync** under **Community plugins**.
+2. In the Langdock API settings, create a workspace API key with the `KNOWLEDGE_FOLDER_API` scope and give it the **Editor** role in the knowledge base you want to sync. Enter the key under **Settings → Langdock Sync**. **Save key** stores it in Obsidian SecretStorage under the fixed ID `langdock-api`. [Langdock API settings](https://app.langdock.com/settings/workspace/products/api) · [Obsidian SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage) · [Langdock Knowledge Folder API](https://docs.langdock.com/en/developer/knowledge-folder-api/knowledge-folder-overview)
+3. Load the knowledge bases, select the target, and click **Test connection**.
+4. Select at least one folder under **Manage folders**. Review the **Preview** and click **Sync now**. **Sync automatically** starts off.
 
-Langdock Sync folgt der Obsidian-Sprache. Die Sprachauswahl steht unter den Plugin-Informationen am Anfang der Einstellungen. Verfügbar sind Deutsch, Englisch, Französisch, Italienisch, Spanisch, Niederländisch, brasilianisches und europäisches Portugiesisch sowie vereinfachtes Chinesisch. Für andere Obsidian-Sprachen verwendet das Plugin Englisch.
+Langdock Sync follows the Obsidian language. You can override it below the plugin information at the top of the settings. Supported languages are German, English, French, Italian, Spanish, Dutch, Brazilian and European Portuguese, and Simplified Chinese. Other Obsidian languages use English.
 
-Beim ersten Öffnen zeigt das Plugin eine dreistufige Einführung. Die Schaltflächen **Einführung anzeigen** und **Über Langdock Sync** stehen direkt unter der Sprachauswahl. Beide Dialoge sind auch über die Befehlspalette erreichbar.
+The plugin shows a three-step introduction the first time you open it. **Show introduction** and **About Langdock Sync** are directly below the language selector. Both dialogs are also available from the command palette.
 
-## Freigabe und Abgleich
+## Eligibility and sync
 
-Die Ordnerauswahl umfasst jeweils die Unterordner. **Gesamter Vault (/)** erlaubt den gesamten Vault. Eine leere Auswahl verhindert den Abgleich. Beim Abgleich werden verwaltete Kopien entfernt, wenn ihre Dateien die Ordner- oder Eigenschaftsfilter nicht mehr erfüllen.
+Selecting a folder includes its subfolders. **Entire vault (/)** includes the whole vault. Select at least one folder to sync. When a file no longer matches the selected folders or property filters, the next sync removes its managed copy.
 
-YAML-Filter unter **Eigenschaften verwalten** sind optional. Standardmäßig ist `classification: public` ausgewählt. Mehrere Werte für dieselbe Eigenschaft gelten als Alternativen. Verschiedene Eigenschaften müssen jeweils passen. Bei einer YAML-Liste genügt ein passender Eintrag. Die Einstufung kannst du mit [Obsidian Classificator](https://github.com/nblum/obsidian-classificator) pflegen.
+YAML filters under **Manage properties** are optional. The default is `classification: public`. Multiple values for one property are alternatives. Different properties must all match. For a YAML list, one matching item is enough. You can manage classifications with [Obsidian Classificator](https://github.com/nblum/obsidian-classificator).
 
-Unabhängig von den Filtern muss im YAML-Frontmatter genau eine `classification` mit dem Wert `public` oder `internal` stehen. Ein explizites `langdock_sync: false`, fehlende oder ungültige Freigaben, `_meta.md` und versteckte Pfade werden übersprungen. Das Plugin überträgt den vollständigen Inhalt einer freigegebenen Markdown-Datei einschließlich Frontmatter.
+Every eligible note must have exactly one `classification` value in its YAML frontmatter, either `public` or `internal`. The plugin skips notes with `langdock_sync: false`, missing or invalid classifications, `_meta.md`, and hidden paths. It uploads the full contents of each eligible Markdown file, including frontmatter.
 
-Der automatische Abgleich läuft beim Öffnen des Vaults und fasst schnelle Änderungen zusammen. Unveränderte Dateien werden anhand ihrer Inhalts-Hashes erkannt. Nach einer Änderung bleibt die bisherige Version in Langdock verfügbar, bis die neue Version den Status `SYNCED` erreicht. Bei Freigabeentzug oder Löschen der Notiz entfernt das Plugin die anhand des Namensschemas zugeordnete Kopie. Eine Umbenennung ändert die Pfadkennung. Die Vorschau zeigt die alte Kopie zum Löschen und den neuen Pfad zum Hochladen.
+Automatic sync runs when the vault opens and groups rapid changes. The plugin compares content hashes to identify unchanged files. After a change, the previous version stays available in Langdock until the new version reaches `SYNCED`. If a note loses approval or is deleted, the plugin finds and removes its managed copy using the naming scheme. Renaming a note changes its path hash. The preview shows the old copy for deletion and the new path for upload.
 
-Status und Fehlermeldungen stehen in den Plugin-Einstellungen. Nach vorübergehenden Verbindungsfehlern versucht der automatische Abgleich es erneut. Wenn Langdock eine Indexierung als fehlgeschlagen meldet, kannst du sie mit **Jetzt synchronisieren** für denselben Inhalt erneut anstoßen.
+The plugin settings show sync status and errors. Automatic sync retries temporary connection failures. If Langdock reports an indexing failure, use **Sync now** to retry indexing the same content.
 
-![Abgleichvorschau mit geplantem Upload, einer Aktualisierung und einer Löschung](assets/screenshots/preview.webp)
+![Sync preview showing a planned upload, update, and deletion](assets/screenshots/preview.webp)
 
-Weitere Aufnahmen zeigen Einführung, Verbindungseinstellungen, Filter und Abgleichstatus. [Alle Screenshots](assets/screenshots/)
+Additional screenshots show the introduction, connection settings, filters, and sync status. [All screenshots](assets/screenshots/)
 
-## Wechsel vom GitHub-Workflow
+## Switching from the GitHub workflow
 
-1. Wähle denselben Vault und dieselbe Wissensdatenbank wie im bisherigen Workflow. Deaktiviere in GitHub Actions den Workflow **Langdock-Wissensdatenbank aktualisieren** (`.github/workflows/sync-langdock.yml`) und warte laufende Läufe ab.
-2. Lass den automatischen Plugin-Abgleich zunächst aus. Wähle die gewünschten Ordner und prüfe die Vorschau für das bisherige Ziel. Dateien aus dem Python-Skript werden anhand ihrer Pfad- und Inhalts-Hashes erkannt. Bei unverändertem Inhalt verwendet das Plugin den vorhandenen Upload weiter.
-3. Starte den ersten Abgleich manuell. Aktiviere danach den automatischen Abgleich genau auf dem Gerät, das diese Wissensdatenbank pflegen soll. Verwende pro Wissensdatenbank genau einen automatischen Abgleich.
+1. Use the same vault and knowledge base as the existing workflow. Disable the **Langdock-Wissensdatenbank aktualisieren** workflow in GitHub Actions (`.github/workflows/sync-langdock.yml`) and wait for any running jobs to finish.
+2. Keep automatic plugin sync off at first. Select the folders you want to include and review the preview for the existing target. The plugin recognizes uploads from the Python script by their path and content hashes and reuses them if the contents are unchanged.
+3. Run the first sync manually. Enable automatic sync on the device that will maintain this knowledge base. Use one automatic sync per knowledge base.
 
-Die vom Plugin verwalteten Namen beginnen mit dem lesbaren Notiztitel. Der Suffix `--obsidian-nblum-<Pfad-Hash>-<Inhalts-Hash>.md` ist für den Abgleich reserviert. Manuelle Uploads mit regulären Dateinamen bleiben erhalten.
+Managed filenames start with the readable note title. Langdock Sync reserves the suffix `--obsidian-nblum-<path-hash>-<content-hash>.md` for managed uploads. Manually uploaded files with regular names remain in the knowledge base.
 
-## Lokal bauen
+## Build locally
 
-Mit der in `.nvmrc` festgelegten Node.js-Version erzeugst du `main.js` für die Installation.
+Use the Node.js version pinned in `.nvmrc` to build `main.js`.
 
 ```sh
 nvm install
@@ -49,4 +49,4 @@ npm ci
 npm run build
 ```
 
-Entwicklungsbefehle und Tests stehen in [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development commands and tests.

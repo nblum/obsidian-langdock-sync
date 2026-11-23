@@ -25,6 +25,7 @@ export async function prepareMockLangdock() {
   let nextStatus = "SYNCED";
   let offline = false;
   let partial = false;
+  let inventoryGate;
   const server = createServer((request, response) => {
     const send = (status, data) => {
       response.writeHead(status, { "Content-Type": "application/json" });
@@ -41,6 +42,11 @@ export async function prepareMockLangdock() {
       }
       if (pathname === "/__test/control" && method === "POST") {
         const command = JSON.parse(await buffer(request));
+        if (command.reset || command.holdInventory === false) {
+          inventoryGate?.resolve();
+          inventoryGate = undefined;
+        }
+        if (command.holdInventory === true) inventoryGate ??= Promise.withResolvers();
         if (command.reset) {
           files.clear();
           requests.length = 0;
@@ -74,6 +80,7 @@ export async function prepareMockLangdock() {
         });
       }
       if (pathname === "/knowledge/writer/list" && method === "GET") {
+        await inventoryGate?.promise;
         const inventory = [...files.values()].map(({ id, name, syncStatus }) => ({ id, name, syncStatus }));
         return success(partial ? inventory.slice(0, -1) : inventory);
       }
@@ -125,6 +132,7 @@ export async function prepareMockLangdock() {
     return {
       env: { LANGDOCK_E2E_URL: url, LANGDOCK_E2E_PLUGIN: directory },
       async close() {
+        inventoryGate?.resolve();
         await new Promise((resolve) => server.close(resolve));
         await rm(directory, { recursive: true, force: true });
       },

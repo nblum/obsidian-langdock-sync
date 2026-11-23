@@ -90,7 +90,7 @@ async function waitForIndex(
     if (Date.now() >= deadline) {
       throw new IndexIssue("errors.indexPending", true);
     }
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 3_000));
   }
 }
 

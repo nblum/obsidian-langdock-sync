@@ -1,4 +1,4 @@
-import { $, browser, expect } from "@wdio/globals";
+import { $, $$, browser, expect } from "@wdio/globals";
 import { obsidianPage } from "wdio-obsidian-service";
 import { control, legacy, state } from "./mock-client.ts";
 import type { RequestEntry } from "./mock-client.ts";
@@ -34,6 +34,76 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       app.secretStorage.setSecret("langdock-api", "simulated-key");
     });
     await obsidianPage.enablePlugin(pluginId);
+  });
+
+  it("shows the next setup step while preview and manual sync are disabled", async () => {
+    await browser.executeObsidian(async ({ app, plugins }) => {
+      app.secretStorage.setSecret("langdock-api", "");
+      await plugins.langdockSync.updateSettings({ folders: [] });
+    });
+
+    const mainWindow = await openSettings();
+    const reason = $(".setting-item-name=Abgleich").$("..").$(".setting-item-description");
+    const preview = () => $("button=Vorschau");
+    const sync = () => $("button=Jetzt synchronisieren");
+    await expect(reason).toHaveText("Hinterlege zuerst einen Langdock-API-Key.");
+    await expect(preview()).toBeDisabled();
+    await expect(sync()).toBeDisabled();
+
+    await $('input[aria-label="Langdock-API-Key"]').setValue("simulated-key");
+    await $("button=Key speichern").click();
+    await expect(reason).toHaveText("Wähle eine Langdock-Wissensdatenbank mit Schreibrecht.");
+    const target = 'select[aria-label="Wissensdatenbank"]:not([aria-hidden="true"])';
+    await expect($(`${target} option[value="writer"]`)).toExist();
+    await $(target).selectByAttribute("value", "writer");
+    await expect(reason).toHaveText("Wähle mindestens einen Ordner für den Abgleich.");
+    await expect(preview()).toBeDisabled();
+    await expect(sync()).toBeDisabled();
+
+    await $('select[aria-label="Ordner zur Synchronisierung"]:not([aria-hidden="true"])').selectByAttribute("value", "/");
+    await expect(reason).toHaveText("");
+    await expect(preview()).toBeEnabled();
+    await expect(sync()).toBeEnabled();
+    await closeSettings(mainWindow);
+  });
+
+  it("opens a single preview immediately and replaces progress with the plan or error", async () => {
+    await obsidianPage.write("Preview.md", approved("public", "Preview this note."));
+    const mainWindow = await openSettings();
+    const settingsWindow = await browser.getWindowHandle();
+    const dialog = $(".langdock-sync-preview");
+    const progress = dialog.$("progress");
+
+    await control({ holdInventory: true });
+    try {
+      await $("button=Vorschau").click();
+      await expect(progress).toBeDisplayed();
+      await expect(dialog.$('[role="status"]')).toHaveText("Vorschau wird vorbereitet …");
+      await waitFor(async () => (await state()).requests.some(({ path }) => path === "/knowledge/writer/list"),
+        "The preview did not request the inventory");
+
+      if (settingsWindow !== mainWindow) await browser.switchToWindow(mainWindow);
+      await browser.executeObsidianCommand("langdock-sync:preview-sync");
+      if (settingsWindow !== mainWindow) {
+        await expect(dialog).not.toExist();
+        await browser.switchToWindow(settingsWindow);
+      }
+      expect((await $$(".langdock-sync-preview")).length).toBe(1);
+    } finally {
+      await control({ holdInventory: false });
+    }
+
+    await expect(dialog.$("ul")).toHaveText(expect.stringContaining("Hochladen · Preview.md"));
+    await expect(progress).not.toExist();
+    await browser.keys("Escape");
+    await expect(dialog).not.toExist();
+    await closeSettings(mainWindow);
+
+    await control({ offline: true });
+    await browser.executeObsidianCommand("langdock-sync:preview-sync");
+    await expect(dialog.$('[role="alert"]')).toHaveText("Langdock-Anfrage fehlgeschlagen (GET, HTTP 503).");
+    await expect(progress).not.toExist();
+    await browser.keys("Escape");
   });
 
   it("previews, checks role and connection, uploads eligible local bytes and adopts a Python upload", async () => {
@@ -177,15 +247,15 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await expect($(".langdock-sync-status .langdock-sync-message--error"))
       .toHaveText(expect.stringContaining("mindestens einen Ordner"));
     const headings = await browser.execute(() =>
-      Array.from(document.querySelectorAll(".setting-item-heading + .langdock-sync-help"), (help) => ({
-        title: help.previousElementSibling?.querySelector(".setting-item-name")?.textContent,
-        text: help.textContent,
+      Array.from(document.querySelectorAll(".setting-item-heading + .langdock-sync-content-row"), (row) => ({
+        title: row.previousElementSibling?.querySelector(".setting-item-name")?.textContent,
+        text: row.querySelector(".langdock-sync-help")?.textContent,
       })));
     expect(headings).toEqual([
       { title: "Ordner verwalten", text: expect.stringContaining("mindestens einen Ordner") },
       { title: "Eigenschaften verwalten", text: expect.stringContaining("Beispiel: classification muss public oder internal sein, und topic muss handbook sein.") },
     ]);
-    await expect($(".setting-item-heading + .langdock-sync-help strong"))
+    await expect($(".langdock-sync-help strong"))
       .toHaveText("Gleiche Eigenschaft: ODER. Unterschiedliche Eigenschaften: UND.");
     await expect($(".setting-item-name=classification = public")).toExist();
     await expect($('.langdock-sync-help a[href="https://github.com/nblum/obsidian-classificator"]')).toExist();
@@ -254,10 +324,18 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
 
     const obsidianLanguage = await browser.executeObsidian(({ obsidian }) => obsidian.getLanguage());
     expect(obsidianLanguage).toBe("en");
+    const hasSettingsSearch = await browser.executeObsidian(({ obsidian }) => obsidian.requireApiVersion("1.13.0"));
     mainWindow = await openSettings();
     await languageSelect("Langue").selectByAttribute("value", "auto");
     await expect($(".setting-item-name=Langdock connection")).toExist();
     await expect(languageSelect("Language")).toHaveValue("auto");
+    if (hasSettingsSearch) {
+      await $(".setting-search-container input").setValue("Sync automatically");
+      const result = $(".vertical-tab-nav-item-title=Sync automatically");
+      await expect(result).toBeDisplayed();
+      await result.click();
+      await expect($(".setting-item-name=Sync automatically")).toBeDisplayed();
+    }
     await closeSettings(mainWindow);
   });
 
@@ -313,8 +391,8 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       const helpRow = languageRow?.nextElementSibling;
       return {
         headerFirst: header?.previousElementSibling === null,
-        title: header?.querySelector("h2")?.textContent,
-        description: header?.querySelector("h2 + p")?.textContent,
+        title: header?.querySelector(".setting-item-name")?.textContent,
+        description: header?.querySelector(".setting-item-description > p")?.textContent,
         buttons: Array.from(helpRow?.querySelectorAll("button") ?? [], (button) => button.textContent),
         nextHeading: helpRow?.nextElementSibling?.querySelector(".setting-item-name")?.textContent,
       };

@@ -34,6 +34,7 @@ export async function control(command: {
   seed?: RemoteFile[];
   offline?: boolean;
   partial?: boolean;
+  holdInventory?: boolean;
   nextStatus?: string;
   statuses?: Record<string, string>;
   folderNames?: { writer: string; viewer: string };

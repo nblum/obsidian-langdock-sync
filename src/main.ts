@@ -25,6 +25,7 @@ export default class LangdockSyncPlugin extends Plugin {
   private language: Language = "en";
   private readonly localizedCommands = new Map<Command, TranslationKey>();
   private helpDialog?: Modal;
+  private previewDialog?: PreviewModal;
   private introductionSeen = false;
   private tab?: LangdockSettingTab;
   private ready = false;
@@ -70,6 +71,7 @@ export default class LangdockSyncPlugin extends Plugin {
     this.stopped = true;
     this.clearTimer();
     this.helpDialog?.close();
+    this.previewDialog?.close();
   }
 
   private addLocalizedCommand(id: string, key: TranslationKey, callback: () => void): void {
@@ -185,7 +187,11 @@ export default class LangdockSyncPlugin extends Plugin {
     if (!this.hasApiKey() || !isId(settings.folderId) || !settings.folders.length) settings.automatic = false;
     if (settings.folderId === previous.folderId && settings.automatic === previous.automatic
       && settings.folders === previous.folders && settings.propertyFilters === previous.propertyFilters) return;
-    await this.saveSettings(settings);
+    try {
+      await this.saveSettings(settings);
+    } finally {
+      this.tab?.refreshSettings();
+    }
   }
 
   private async saveSettings(settings: Settings): Promise<void> {
@@ -299,13 +305,24 @@ export default class LangdockSyncPlugin extends Plugin {
   }
 
   async showPreview(): Promise<void> {
+    if (this.stopped || this.previewDialog) return;
     const settings = this.config;
+    const dialog = new PreviewModal(this.app, this.translate);
+    this.previewDialog = dialog;
+    dialog.setCloseCallback(() => {
+      if (this.previewDialog === dialog) delete this.previewDialog;
+    }).open();
+
     try {
-      const plan = await this.enqueue(async () => (await this.prepare(settings)).plan);
-      if (this.stopped || this.config !== settings) return;
-      new PreviewModal(this.app, plan, this.translate).open();
+      await this.enqueue(async () => {
+        if (this.previewDialog !== dialog) return;
+        const { plan, assertCurrent } = await this.prepare(settings);
+        if (this.previewDialog !== dialog) return;
+        assertCurrent();
+        dialog.showPlan(plan);
+      });
     } catch (error) {
-      if (!this.stopped) this.notify(formatIssue(this.translate, issueFromError(error)));
+      if (this.previewDialog === dialog) dialog.showError(issueFromError(error));
     }
   }
 
