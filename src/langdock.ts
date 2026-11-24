@@ -1,4 +1,5 @@
 import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
+import { uploadFormat } from "./file-formats.ts";
 import { LocalizedError } from "./i18n.ts";
 import type { ErrorKey, Issue } from "./i18n.ts";
 import { managedName } from "./notes.ts";
@@ -23,6 +24,7 @@ export interface ManagedFile {
   pathHash: string;
   contentHash: string;
   status: IndexStatus;
+  createdAt?: number;
 }
 
 export class SyncError extends LocalizedError {
@@ -142,15 +144,21 @@ export class Langdock {
       const names = managedName(entry.name);
       if (!names) continue;
       if (!isStatus(entry.syncStatus)) throw invalidResponse();
-      managed.push({ ...names, id: entry.id, name: entry.name, status: entry.syncStatus });
+      const createdAt = typeof entry.createdAt === "string" ? Date.parse(entry.createdAt) : NaN;
+      managed.push({
+        ...names, id: entry.id, name: entry.name, status: entry.syncStatus,
+        ...(Number.isFinite(createdAt) && { createdAt }),
+      });
     }
     return managed;
   }
 
   async upload(folderId: string, name: string, bytes: ArrayBuffer, assertCurrent: () => void): Promise<string> {
-    if (bytes.byteLength > 10_000_000) throw new SyncError("errors.fileTooLarge");
+    const format = uploadFormat(name);
+    if (!format) throw new SyncError("errors.uploadPreparation");
+    if (bytes.byteLength > format.limitMb * 1_000_000) throw new SyncError("errors.fileTooLarge");
     const form = new FormData();
-    form.append("file", new Blob([bytes], { type: "text/markdown" }), name);
+    form.append("file", new Blob([bytes], { type: format.mimeType }), name);
     const body = new Response(form);
     const contentType = body.headers.get("content-type");
     if (!contentType) throw new SyncError("errors.uploadPreparation");

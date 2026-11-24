@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Select attachment extensions from a checklist and sync files whose entry in the folder’s `_meta.md` matches the sync filters.
+- Show a sync status button by default in the header of eligible notes and attachments, next to the Classificator badge when present. Open it to see when the indexed copy was uploaded and to sync the file.
+
 ## [0.2.0] - 2026-11-23
 
 ### Added

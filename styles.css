@@ -35,6 +35,31 @@
   flex-wrap: wrap;
 }
 
+.langdock-sync-attachments.setting-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--size-4-3);
+}
+
+.langdock-sync-attachment-options {
+  flex: 1 0 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));
+  gap: var(--size-4-2);
+}
+
+.langdock-sync-attachment-option {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  width: fit-content;
+  cursor: pointer;
+}
+
+.langdock-sync-attachment-option input[type="checkbox"] {
+  margin: 0;
+}
+
 .langdock-sync-help {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
@@ -88,4 +113,81 @@
 .langdock-sync-settings-header p,
 .langdock-sync-settings-header ul {
   margin-block: var(--size-4-2);
+}
+
+.langdock-sync-note-status {
+  --langdock-note-accent: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  font-size: var(--font-ui-small);
+}
+
+.langdock-sync-note-status::before {
+  content: "";
+  flex: none;
+  width: var(--size-4-2);
+  height: var(--size-4-2);
+  border-radius: 50%;
+  background-color: var(--langdock-note-accent);
+}
+
+.view-action.langdock-sync-note-action {
+  display: block;
+  flex: 0 1 auto;
+  align-self: center;
+  min-width: 0;
+  max-width: 9rem;
+  height: auto;
+  margin-inline: 3px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--langdock-note-accent) 45%, transparent);
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--langdock-note-accent) 13%, var(--background-primary));
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.view-action.langdock-sync-note-action::before {
+  display: inline-block;
+  margin-inline-end: var(--size-4-1);
+}
+
+.view-action.langdock-sync-note-action:hover,
+.view-action.langdock-sync-note-action:focus-visible {
+  background-color: color-mix(in srgb, var(--langdock-note-accent) 26%, var(--background-primary));
+}
+
+.view-action.langdock-sync-note-action:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.langdock-sync-note-status[data-state="unsynced"] {
+  --langdock-note-accent: var(--color-purple);
+}
+
+.langdock-sync-note-status[data-state="outdated"] {
+  --langdock-note-accent: var(--color-yellow);
+}
+
+.langdock-sync-note-status[data-state="synced"] {
+  --langdock-note-accent: var(--color-blue);
+}
+
+.langdock-sync-note-path {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.langdock-sync-note-upload-time:not([hidden]) {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
 }

@@ -5,6 +5,7 @@ interface RemoteFile {
   id: string;
   name: string;
   syncStatus: string;
+  createdAt?: string;
   bytes?: string;
 }
 

@@ -3,11 +3,11 @@ import { LocalizedError } from "./i18n.ts";
 import type { Issue } from "./i18n.ts";
 import { isFailed, SyncError } from "./langdock.ts";
 import type { IndexStatus, Langdock, ManagedFile } from "./langdock.ts";
-import { inspectNote, readNote } from "./notes.ts";
-import type { Note, NoteStorage } from "./notes.ts";
+import { readSyncFile } from "./notes.ts";
+import type { FileStorage, SyncFile } from "./notes.ts";
 
 interface Transfer {
-  note: Note;
+  file: SyncFile;
   versions: ManagedFile[];
   pending?: ManagedFile;
   failed?: ManagedFile;
@@ -28,13 +28,13 @@ export interface RunReport {
   retry: boolean;
 }
 
-export function planSync(notes: ReadonlyMap<string, Note>, files: readonly ManagedFile[]): Plan {
+export function planSync(local: ReadonlyMap<string, SyncFile>, files: readonly ManagedFile[]): Plan {
   const versions = new Map<string, ManagedFile[]>();
   const removals: Removal[] = [];
   const transfers: Transfer[] = [];
 
   for (const file of files) {
-    if (!notes.has(file.pathHash)) {
+    if (!local.has(file.pathHash)) {
       removals.push({ file });
       continue;
     }
@@ -43,22 +43,27 @@ export function planSync(notes: ReadonlyMap<string, Note>, files: readonly Manag
     versions.set(file.pathHash, entries);
   }
 
-  for (const note of notes.values()) {
-    const entries = versions.get(note.pathHash) ?? [];
-    const matching = entries.filter(({ contentHash }) => contentHash === note.contentHash);
+  for (const file of local.values()) {
+    const entries = versions.get(file.pathHash) ?? [];
+    const matching = entries.filter(({ contentHash }) => contentHash === file.contentHash);
     const synced = matching.find(({ status }) => status === "SYNCED");
     if (synced) {
-      for (const file of entries) {
-        if (file.id !== synced.id) removals.push({ file, path: note.path });
+      for (const older of entries) {
+        if (older.id !== synced.id) removals.push({ file: older, path: file.path });
       }
       continue;
     }
     const pending = matching.find(({ status }) => !isFailed(status));
     const failed = matching.find(({ status }) => isFailed(status));
-    transfers.push({ note, versions: entries, ...(pending && { pending }), ...(failed && { failed }) });
+    transfers.push({ file, versions: entries, ...(pending && { pending }), ...(failed && { failed }) });
   }
 
   return { transfers, removals };
+}
+
+export function planSingleFile(file: SyncFile, files: readonly ManagedFile[]): Plan & { versions: ManagedFile[] } {
+  const versions = files.filter(({ pathHash }) => pathHash === file.pathHash);
+  return { ...planSync(new Map([[file.pathHash, file]]), versions), versions };
 }
 
 export class StaleRun extends LocalizedError {
@@ -96,7 +101,7 @@ async function waitForIndex(
 
 export async function applyPlan(
   plan: Plan,
-  storage: NoteStorage,
+  storage: FileStorage,
   client: Langdock,
   settings: Pick<Settings, "folderId" | "propertyFilters">,
   retryFailed: boolean,
@@ -110,18 +115,17 @@ export async function applyPlan(
     await client.delete(folderId, file.id);
   }
 
-  for (const { note, versions, pending, failed } of plan.transfers) {
+  for (const { file, versions, pending, failed } of plan.transfers) {
     assertCurrent();
     try {
       let id = pending?.id;
-      let name = pending?.name ?? note.uploadName;
+      const name = pending?.name ?? file.uploadName;
       if (!id) {
         if (failed && !retryFailed) checkIndexStatus(failed.status);
-        const bytes = await readNote(storage, note.path);
-        const current = await inspectNote(note.path, bytes, propertyFilters);
-        if (current?.contentHash !== note.contentHash) throw new StaleRun();
-        name = note.uploadName;
-        id = await client.upload(folderId, name, bytes, assertCurrent);
+        const current = await readSyncFile(storage, file.path, propertyFilters);
+        if (!current || current.file.contentHash !== file.contentHash) throw new StaleRun();
+        assertCurrent();
+        id = await client.upload(folderId, name, current.bytes, assertCurrent);
       }
 
       await waitForIndex(client, folderId, id, name, assertCurrent);
@@ -132,7 +136,7 @@ export async function applyPlan(
       }
     } catch (error) {
       if (!(error instanceof IndexIssue || (error instanceof SyncError && !error.retry))) throw error;
-      report.issues.push({ ...error.issue, path: note.path });
+      report.issues.push({ ...error.issue, path: file.path });
       report.retry ||= error.retry;
     }
   }

@@ -11,6 +11,21 @@ function mutations(requests: readonly RequestEntry[]): RequestEntry[] {
   return requests.filter(({ method }) => method === "POST" || method === "DELETE");
 }
 
+function blankPdf(): string {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = objects.map((object, index) => {
+    const offset = pdf.length;
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  return pdf + `xref\n0 4\n0000000000 65535 f \n${offsets.join("")}trailer\n<< /Root 1 0 R /Size 4 >>\nstartxref\n${pdf.length}\n%%EOF\n`;
+}
+
 async function syncNow() {
   return browser.executeObsidian(async ({ plugins }) => {
     const plugin = plugins.langdockSync;
@@ -129,7 +144,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       app.secretStorage.setSecret("langdock-api", "previous-simulated-key");
     });
     const mainWindow = await openSettings();
-    const key = $('input[aria-label="Langdock-API-Key"][type="password"]');
+    const key = () => $('input[aria-label="Langdock-API-Key"][type="password"]');
     const connectionHeading = await browser.execute(() =>
       document.querySelector('input[aria-label="Langdock-API-Key"]')?.closest(".setting-item")
         ?.previousElementSibling?.querySelector(".setting-item-name")?.textContent,
@@ -141,13 +156,13 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await expect(apiSettingsLink).toHaveAttribute("rel", "noopener");
     await expect(apiSettingsLink.$(".."))
       .toHaveText(expect.stringContaining("Workspace-API-Key mit der Berechtigung für die Knowledge Folder API (KNOWLEDGE_FOLDER_API)"));
-    await expect(key).toHaveValue("");
-    await key.setValue("simulated-key");
+    await expect(key()).toHaveValue("");
+    await key().setValue("simulated-key");
     await $("button=Key speichern").click();
     const selector = 'select[aria-label="Wissensdatenbank"]:not([aria-hidden="true"])';
     await expect($(`${selector} option[value="viewer"]`)).toHaveAttribute("disabled");
     await expect($(selector)).toHaveValue("");
-    await expect(key).toHaveValue("");
+    await expect(key()).toHaveValue("");
     await $(selector).selectByAttribute("value", "writer");
     await expect($(selector)).toHaveValue("writer");
     await $("button=Verbindung testen").click();
@@ -330,7 +345,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await expect($(".setting-item-name=Langdock connection")).toExist();
     await expect(languageSelect("Language")).toHaveValue("auto");
     if (hasSettingsSearch) {
-      for (const name of ["Sync automatically", "Sync interval"]) {
+      for (const name of ["Sync automatically", "Sync interval", "Show sync button in files", "Attachment extensions"]) {
         await $(".setting-search-container input").setValue(name);
         const result = $(`.vertical-tab-nav-item-title=${name}`);
         await expect(result).toBeDisplayed();
@@ -339,6 +354,215 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       }
     }
     await closeSettings(mainWindow);
+  });
+
+  it("shows per-note status and syncs only the eligible note from its overlay", async () => {
+    const path = "Knowledge/Guide.md";
+    const original = approved("public", "First version");
+    const changed = approved("public", "Revised version");
+    const other = approved("public", "Another local note");
+    const orphan = { ...legacy("orphan", "Knowledge/Removed.md", other), createdAt: "2026-01-15T10:00:00.000Z" };
+    await control({ seed: [orphan] });
+    await browser.executeObsidian(async ({ app, plugins }, path, original, other) => {
+      await app.vault.createFolder("Knowledge");
+      await app.vault.create("Knowledge/Other.md", other);
+      await app.vault.create("Knowledge/Excluded.md", "---\nclassification: public\nlangdock_sync: false\n---\nExcluded");
+      await app.vault.create("Outside.md", other);
+      const file = await app.vault.create(path, original);
+      await plugins.langdockSync.updateSettings({ folders: ["Knowledge"] });
+      await app.workspace.getLeaf(false).openFile(file);
+    }, path, original, other);
+
+    const noteButtonSelector = ".view-action.langdock-sync-note-action";
+    const noteButton = () => $(noteButtonSelector);
+    const overlay = () => $(".langdock-sync-note-dialog");
+    const overlayStatus = () => overlay().$(".langdock-sync-note-status");
+    const uploadTime = () => overlay().$(".langdock-sync-note-upload-time");
+    const syncButton = () => overlay().$("button=Jetzt synchronisieren");
+    const expectUploadTime = async (id: string) => {
+      const uploadedAt = (await state()).files.find((file) => file.id === id)?.createdAt;
+      if (!uploadedAt) throw new Error(`Missing upload timestamp for ${id}`);
+      const localTime = await browser.execute((timestamp) => new Date(timestamp).toLocaleString("de"), uploadedAt);
+      await expect(uploadTime()).toBeDisplayed();
+      await expect(uploadTime()).toHaveAttribute("datetime", uploadedAt);
+      await expect(uploadTime()).toHaveText(`Upload der indexierten Kopie · ${localTime}`);
+    };
+    const expectStatusColor = async (status: string, color: string) => {
+      await expect(noteButton()).toHaveAttribute("data-state", status);
+      const matches = await browser.execute((selector, color) => {
+        const button = document.querySelector(selector);
+        if (!button) return false;
+        const style = getComputedStyle(button);
+        const accent = style.getPropertyValue("--langdock-note-accent").trim();
+        return !!accent && accent === style.getPropertyValue(`--color-${color}`).trim();
+      }, noteButtonSelector, color);
+      expect(matches).toBe(true);
+    };
+    await expectStatusColor("unsynced", "purple");
+    await expect(noteButton()).toHaveText("Nicht synchronisiert");
+    expect(mutations((await state()).requests)).toHaveLength(0);
+
+    await browser.executeObsidian(({ app, obsidian }) => {
+      const view = app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+      if (!view) throw new Error("The test note view is missing");
+      const badge = view.addAction("tag", "Classify", () => {});
+      badge.addClass("classificator-badge--header");
+      badge.parentElement?.append(badge);
+    });
+    const besideClassificator = () => $(`.classificator-badge--header + ${noteButtonSelector}`);
+    await expect(besideClassificator()).toBeDisplayed();
+
+    const toggleNoteButton = async () => {
+      const mainWindow = await openSettings();
+      await $(".setting-item-name=Sync-Schaltfläche in Dateien anzeigen").$("../..").$(".checkbox-container").click();
+      await closeSettings(mainWindow);
+    };
+    const savedVisibility = () => browser.executeObsidian(async ({ plugins }) => {
+      const data = await plugins.langdockSync.loadData() as { showNoteSyncButton?: boolean };
+      return data.showNoteSyncButton;
+    });
+    await toggleNoteButton();
+    await expect(noteButton()).not.toExist();
+    await waitFor(async () => await savedVisibility() === false, "The disabled note sync button preference was not saved");
+    await obsidianPage.disablePlugin(pluginId);
+    await obsidianPage.enablePlugin(pluginId);
+    await expect(noteButton()).not.toExist();
+    await toggleNoteButton();
+    await expectStatusColor("unsynced", "purple");
+    await expect(besideClassificator()).toBeDisplayed();
+
+    await noteButton().click();
+    await expect(overlay().$(".langdock-sync-note-path")).toHaveText(path);
+    await expect(overlayStatus()).toHaveAttribute("data-state", "unsynced");
+    await expect(uploadTime()).not.toBeDisplayed();
+    await syncButton().click();
+    await expect(overlayStatus()).toHaveAttribute("data-state", "synced");
+    await expectUploadTime("upload-1");
+    await expectStatusColor("synced", "blue");
+    await browser.keys("Escape");
+
+    await browser.executeObsidian(async ({ app }, path, changed) => {
+      const file = app.vault.getFileByPath(path);
+      if (!file) throw new Error("The test note is missing");
+      await app.vault.modify(file, changed);
+      const leaf = app.workspace.getLeaf(false);
+      const view = leaf.getViewState();
+      await leaf.setViewState({ ...view, state: { ...view.state, mode: "preview" } });
+    }, path, changed);
+    await expectStatusColor("outdated", "yellow");
+    await expect(noteButton()).toHaveText("Veraltet");
+    await noteButton().click();
+    await expect(overlayStatus()).toHaveAttribute("data-state", "outdated");
+    await expectUploadTime("upload-1");
+    await syncButton().click();
+    await expect(overlayStatus()).toHaveAttribute("data-state", "synced");
+    await expectUploadTime("upload-2");
+    await browser.keys("Escape");
+
+    const result = await state();
+    expect(result.files.map(({ name }) => name).sort()).toEqual([orphan.name, legacy("updated", path, changed).name].sort());
+    expect(mutations(result.requests).map(({ method, id }) => [method, id]))
+      .toEqual([["POST", "upload-1"], ["POST", "upload-2"], ["DELETE", "upload-1"]]);
+
+    const openNote = async (path: string) => {
+      await browser.executeObsidian(async ({ app }, path) => {
+        const file = app.vault.getFileByPath(path);
+        if (!file) throw new Error("The test note is missing");
+        await app.workspace.getLeaf(false).openFile(file);
+      }, path);
+    };
+    for (const excluded of ["Outside.md", "Knowledge/Excluded.md"]) {
+      await openNote(excluded);
+      await expect(noteButton()).not.toExist();
+    }
+    await openNote(path);
+    await expect(noteButton()).toBeDisplayed();
+    await obsidianPage.disablePlugin(pluginId);
+    await expect(noteButton()).not.toExist();
+    await obsidianPage.enablePlugin(pluginId);
+    await expectStatusColor("synced", "blue");
+  });
+
+  it("syncs an approved PDF from its file header and reacts to reclassification in _meta.md", async () => {
+    const path = "Knowledge/Guide.PDF";
+    const metadataPath = "Knowledge/_meta.md";
+    const pdf = blankPdf();
+    await browser.executeObsidian(async ({ app, plugins }, path, pdf, metadataPath) => {
+      await app.vault.createFolder("Knowledge");
+      await app.vault.create(metadataPath, "---\nclassification: internal\nattachment-classifications:\n  Guide.PDF: public\n  Source.txt: public\n---\n");
+      const file = await app.vault.createBinary(path, new TextEncoder().encode(pdf).buffer);
+      await app.vault.createBinary("Knowledge/Unlisted.pdf", new TextEncoder().encode(pdf).buffer);
+      await app.vault.create("Knowledge/Source.txt", "An approved attachment of an unchecked format.");
+      await plugins.langdockSync.updateSettings({
+        folders: ["Knowledge"], propertyFilters: [{ property: "classification", value: "public" }],
+        attachmentExtensions: "txt",
+      });
+      await app.workspace.getLeaf(false).openFile(file);
+    }, path, pdf, metadataPath);
+
+    const fileButton = () => $('.workspace-leaf-content[data-type="pdf"] .langdock-sync-note-action');
+    await expect(fileButton()).not.toExist();
+    let mainWindow = await openSettings();
+    const extensions = () => $('[role="group"][aria-label="Dateiendungen für Anhänge"]');
+    const option = (value: string) => extensions().$(`input[type="checkbox"][value="${value}"]`);
+    const save = () => $("button=Endungen speichern");
+    await expect(option("txt")).toBeChecked();
+    await expect(option("pdf")).not.toBeChecked();
+    await expect(option("png")).not.toExist();
+    await expect(save()).toBeDisabled();
+    await option("pdf").click();
+    await option("docx").click();
+    await option("txt").click();
+    await expect(save()).toBeEnabled();
+    await save().click();
+    await expect(save()).toBeDisabled();
+    await closeSettings(mainWindow);
+    const saved = await browser.executeObsidian(async ({ plugins }) => await plugins.langdockSync.loadData() as unknown);
+    expect(saved).toMatchObject({ attachmentExtensions: "pdf,docx" });
+
+    await obsidianPage.disablePlugin(pluginId);
+    await obsidianPage.enablePlugin(pluginId);
+    mainWindow = await openSettings();
+    await expect(option("pdf")).toBeChecked();
+    await expect(option("docx")).toBeChecked();
+    await expect(option("txt")).not.toBeChecked();
+    await closeSettings(mainWindow);
+
+    await expect(fileButton()).toHaveAttribute("data-state", "unsynced");
+    await browser.executeObsidianCommand("langdock-sync:preview-sync");
+    await expect($(".langdock-sync-preview li")).toHaveText(`Hochladen · ${path}`);
+    expect(await $$(".langdock-sync-preview li")).toHaveLength(1);
+    expect(mutations((await state()).requests)).toHaveLength(0);
+    await browser.keys("Escape");
+
+    await fileButton().click();
+    const overlay = () => $(".langdock-sync-note-dialog");
+    await expect(overlay().$(".langdock-sync-note-path")).toHaveText(path);
+    await expect(overlay().$(".langdock-sync-note-status")).toHaveAttribute("data-state", "unsynced");
+    await overlay().$("button=Jetzt synchronisieren").click();
+    await expect(overlay().$(".langdock-sync-note-status")).toHaveAttribute("data-state", "synced");
+    await browser.keys("Escape");
+    await expect(fileButton()).toHaveAttribute("data-state", "synced");
+    const uploaded = (await state()).files;
+    expect(uploaded).toHaveLength(1);
+    expect(uploaded[0]?.name).toMatch(/^Guide--obsidian-nblum-[a-f0-9]{32}-[a-f0-9]{32}\.pdf$/u);
+    expect(uploaded[0]?.bytes).toBe(Buffer.from(pdf).toString("base64"));
+    const manual = await syncNow();
+    expect(manual.issue).toBeNull();
+    expect(mutations((await state()).requests).map(({ method }) => method)).toEqual(["POST"]);
+
+    await browser.executeObsidian(async ({ plugins }) => {
+      await plugins.langdockSync.updateSettings({ automatic: true });
+    });
+    await waitFor(async () => (await readStatus()).lastSuccess !== manual.lastSuccess, "Initial automatic run did not finish");
+    await browser.executeObsidian(async ({ app }, metadataPath) => {
+      const metadata = app.vault.getFileByPath(metadataPath);
+      if (!metadata) throw new Error("The folder metadata is missing");
+      await app.vault.modify(metadata, "---\nclassification: public\nattachment-classifications:\n  Guide.PDF: internal\n---\n");
+    }, metadataPath);
+    await expect(fileButton()).not.toExist();
+    await waitFor(async () => (await state()).files.length === 0, "Reclassification did not remove the managed PDF");
+    expect(mutations((await state()).requests).map(({ method }) => method)).toEqual(["POST", "DELETE"]);
   });
 
   it("shows the introduction once and reopens the help dialogs from settings and commands", async () => {
@@ -402,7 +626,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     expect(topControls).toEqual({
       headerFirst: true,
       title: "Langdock Sync",
-      description: "Synchronisiert freigegebene Markdown-Notizen aus Obsidian mit einer Langdock-Wissensdatenbank.",
+      description: "Synchronisiert freigegebene Markdown-Notizen und Anhänge aus Obsidian mit einer Langdock-Wissensdatenbank.",
       buttons: ["Einführung anzeigen", "Über Langdock Sync"],
       nextHeading: "Langdock Verbindung",
     });

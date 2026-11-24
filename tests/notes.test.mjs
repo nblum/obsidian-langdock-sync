@@ -6,7 +6,7 @@ import { applyPlan, planSync, StaleRun } from "../src/sync.ts";
 
 const bytes = (text) => new TextEncoder().encode(text).buffer;
 const note = (fields) => bytes(`---\n${fields}\n---\nMarkdown\n`);
-const fullVault = { folders: ["/"], propertyFilters: [] };
+const fullVault = { folders: ["/"], propertyFilters: [], attachmentExtensions: "" };
 
 test("accepts literal Obsidian classifications and rejects ambiguous or opted-out frontmatter", () => {
   assert.equal(classification(note("classification: public")), "public");
@@ -77,6 +77,7 @@ test("defaults to public and requires a local folder before enabling automatic s
   const defaults = readData({ folderId: "writer", automatic: true }).settings;
   assert.deepEqual(defaults.folders, []);
   assert.equal(defaults.automatic, false);
+  assert.equal(defaults.attachmentExtensions, "");
   assert.deepEqual(defaults.propertyFilters, [{ property: "classification", value: "public" }]);
   assert.deepEqual(readData({ folders: ["/"], propertyFilters: [] }).settings.propertyFilters, []);
 });
@@ -108,10 +109,74 @@ test("inventories only selected folder trees, including subfolders and excluding
     },
   };
   const result = await inventory(storage, ["Share/Sub/Note.md", "Shared/Other.md"], {
-    folders: ["Share", "Share/Sub"], propertyFilters: [],
+    ...fullVault, folders: ["Share", "Share/Sub"],
   }, () => {});
   assert.deepEqual(listed, ["Share", "Share/Sub"]);
   assert.deepEqual([...result.values()].map(({ path }) => path), ["Share/Sub/Note.md"]);
-  await assert.rejects(inventory(storage, [], { folders: ["Missing"], propertyFilters: [] }, () => {}), IncompleteInventory);
-  await assert.rejects(inventory(storage, [], { folders: [], propertyFilters: [] }, () => {}), IncompleteInventory);
+  await assert.rejects(inventory(storage, [], { ...fullVault, folders: ["Missing"] }, () => {}), IncompleteInventory);
+  await assert.rejects(inventory(storage, [], { ...fullVault, folders: [] }, () => {}), IncompleteInventory);
+});
+
+test("loads saved attachment extensions and omits formats rejected by the knowledge base", () => {
+  const { settings } = readData({ attachmentExtensions: " PDF, .DOCX, pdf, , PNG,svg, jpg " });
+  assert.equal(settings.attachmentExtensions, "pdf,docx");
+});
+
+test("requires an exact attachment entry in its own folder and applies other filters to the folder metadata", async () => {
+  const metadataPath = "Docs/_meta.md";
+  const path = "Docs/Guide.PDF";
+  const entries = [path, "Docs/Case.pdf", "Docs/Private.pdf", "Docs/Unlisted.pdf", "Docs/Image.png", metadataPath];
+  const read = [];
+  const storage = {
+    list: async (directory) => directory === "Docs"
+      ? { files: entries, folders: ["Docs/Sub"] }
+      : { files: ["Docs/Sub/Guide.PDF"], folders: [] },
+    readBinary: async (path) => {
+      read.push(path);
+      return path === metadataPath
+        ? note("classification: internal\naudience: [ops, team]\nattachment-classifications:\n  Guide.PDF: public\n  case.pdf: public\n  Private.pdf: confidential\n  Image.png: public")
+        : new Uint8Array([0xff, 0x00, 0x13]).buffer;
+    },
+  };
+  const scope = {
+    folders: ["Docs"], attachmentExtensions: "pdf",
+    propertyFilters: [{ property: "classification", value: "public" }, { property: "audience", value: "team" }],
+  };
+  const files = await inventory(storage, entries, scope, () => {});
+  assert.deepEqual([...files.values()].map(({ path }) => path), [path]);
+  assert.deepEqual(read, [metadataPath, path]);
+  const file = [...files.values()][0];
+  assert.match(file.uploadName, /^Guide--obsidian-nblum-.*\.pdf$/u);
+  assert.deepEqual(managedName(file.uploadName), { pathHash: file.pathHash, contentHash: file.contentHash });
+  assert.equal(managedName(file.uploadName.replace(/\.pdf$/u, ".png")), null);
+  assert.equal((await inventory(storage, entries, { ...scope, attachmentExtensions: "" }, () => {})).size, 0);
+});
+
+test("rechecks attachment metadata before upload and stops on unreadable metadata", async () => {
+  const path = "Guide.pdf";
+  const metadataPath = "_meta.md";
+  let metadata = note("attachment-classifications:\n  Guide.pdf: public");
+  const storage = {
+    list: async () => ({ files: [path, metadataPath], folders: [] }),
+    readBinary: async (path) => {
+      if (path !== metadataPath) return bytes("Attachment data");
+      if (!metadata) throw new Error("EIO");
+      return metadata;
+    },
+  };
+  const scope = { ...fullVault, attachmentExtensions: "pdf" };
+  const files = await inventory(storage, [path, metadataPath], scope, () => {});
+  assert.equal(files.size, 1);
+  metadata = note("classification: public\nattachment-classifications:\n  Guide.pdf: confidential");
+  let uploads = 0;
+  const client = { upload: async () => { uploads++; } };
+  const settings = { ...scope, folderId: "writer" };
+  await assert.rejects(applyPlan(planSync(files, []), storage, client, settings, false, () => {}), StaleRun);
+  assert.equal(uploads, 0);
+  metadata = note("langdock_sync: false\nattachment-classifications:\n  Guide.pdf: public");
+  assert.equal((await inventory(storage, [path, metadataPath], scope, () => {})).size, 0);
+  metadata = null;
+  await assert.rejects(inventory(storage, [path, metadataPath], scope, () => {}), /_meta\.md/u);
+  const missingMetadata = { ...storage, list: async () => ({ files: [path], folders: [] }) };
+  await assert.rejects(inventory(missingMetadata, [path, metadataPath], scope, () => {}), IncompleteInventory);
 });

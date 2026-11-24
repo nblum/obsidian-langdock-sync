@@ -6,10 +6,12 @@ import { AboutModal, IntroductionModal } from "./help.ts";
 import { createTranslator, formatIssue, issueFromError, resolveLanguage } from "./i18n.ts";
 import type { Issue, Language, LanguagePreference, TranslationKey } from "./i18n.ts";
 import { isId, Langdock, SyncError } from "./langdock.ts";
-import type { Folder } from "./langdock.ts";
-import { IncompleteInventory, inventory, isCandidate } from "./notes.ts";
+import type { Folder, ManagedFile } from "./langdock.ts";
+import { NoteSyncControls } from "./note-sync-controls.ts";
+import { IncompleteInventory, inventory, isCandidate, isFolderMetadata, isInSyncScope, readSyncFile } from "./notes.ts";
+import type { SyncFile } from "./notes.ts";
 import { LangdockSettingTab, PreviewModal } from "./settings.ts";
-import { applyPlan, planSync, StaleRun } from "./sync.ts";
+import { applyPlan, planSingleFile, planSync, StaleRun } from "./sync.ts";
 import type { Plan } from "./sync.ts";
 
 const debounceMs = 1_200;
@@ -21,11 +23,13 @@ export default class LangdockSyncPlugin extends Plugin {
   busy = false;
   languagePreference: LanguagePreference = "auto";
   translate = createTranslator("en");
+  showNoteSyncButton = true;
 
   private language: Language = "en";
   private readonly localizedCommands = new Map<Command, TranslationKey>();
   private helpDialog?: Modal;
   private previewDialog?: PreviewModal;
+  private noteControls?: NoteSyncControls;
   private introductionSeen = false;
   private tab?: LangdockSettingTab;
   private ready = false;
@@ -41,10 +45,11 @@ export default class LangdockSyncPlugin extends Plugin {
   private saveQueue = Promise.resolve();
 
   override async onload(): Promise<void> {
-    const { settings, status, legacySecretId, language, introductionSeen } = readData(await this.loadData() as unknown);
+    const { settings, status, legacySecretId, language, introductionSeen, showNoteSyncButton } = readData(await this.loadData() as unknown);
     this.config = settings;
     this.status = status;
     this.introductionSeen = introductionSeen;
+    this.showNoteSyncButton = showNoteSyncButton;
     this.setLanguage(language);
     if (legacySecretId !== null) await this.migrateSecret(legacySecretId);
     this.tab = new LangdockSettingTab(this);
@@ -58,12 +63,20 @@ export default class LangdockSyncPlugin extends Plugin {
       if (this.stopped) return;
       this.ready = true;
       if (!this.introductionSeen) this.showIntroduction();
-      const { vault } = this.app;
+      const { vault, workspace } = this.app;
+      const noteControls = new NoteSyncControls(this);
+      this.noteControls = noteControls;
+      this.registerEvent(workspace.on("file-open", () => noteControls.refresh(true)));
+      this.registerEvent(workspace.on("layout-change", () => noteControls.refresh()));
       this.registerEvent(vault.on("create", (file) => this.onVaultChange(file)));
       this.registerEvent(vault.on("modify", (file) => this.onVaultChange(file)));
       this.registerEvent(vault.on("rename", (file, oldPath) => this.onVaultChange(file, oldPath)));
       this.registerEvent(vault.on("delete", (file) => this.onVaultChange(file)));
-      this.registerDomEvent(window, "online", () => this.schedule(0));
+      this.registerDomEvent(window, "online", () => {
+        this.schedule(0);
+        noteControls.refresh(true);
+      });
+      noteControls.refresh();
       this.schedule(debounceMs);
       this.startSyncInterval();
     });
@@ -75,6 +88,7 @@ export default class LangdockSyncPlugin extends Plugin {
     this.clearSyncInterval();
     this.helpDialog?.close();
     this.previewDialog?.close();
+    this.noteControls?.dispose();
   }
 
   private addLocalizedCommand(id: string, key: TranslationKey, callback: () => void): void {
@@ -116,6 +130,7 @@ export default class LangdockSyncPlugin extends Plugin {
   async updateLanguage(preference: LanguagePreference): Promise<void> {
     if (preference === this.languagePreference) return;
     this.setLanguage(preference);
+    this.noteControls?.refresh();
     try {
       await this.persist();
     } catch {
@@ -123,7 +138,22 @@ export default class LangdockSyncPlugin extends Plugin {
     }
   }
 
-  formatSyncTime(timestamp: string): string {
+  async updateNoteSyncButton(enabled: boolean): Promise<void> {
+    if (this.showNoteSyncButton === enabled) return;
+    this.showNoteSyncButton = enabled;
+    this.noteControls?.refresh();
+    try {
+      await this.persist();
+    } catch {
+      if (this.showNoteSyncButton === enabled) {
+        this.showNoteSyncButton = !enabled;
+        this.noteControls?.refresh();
+      }
+      throw new SyncError("errors.settingsSave");
+    }
+  }
+
+  formatSyncTime(timestamp: string | number): string {
     return new Date(timestamp).toLocaleString(this.language);
   }
 
@@ -136,11 +166,14 @@ export default class LangdockSyncPlugin extends Plugin {
   }
 
   private onVaultChange(file: TAbstractFile, oldPath = file.path): void {
-    const relevantPath = file instanceof TFolder ? isVisiblePath : isCandidate;
+    const extensions = this.config.attachmentExtensions.split(",").filter(Boolean);
+    const relevantPath = file instanceof TFolder ? isVisiblePath : (path: string) => isCandidate(path, extensions)
+      || (extensions.length > 0 && isVisiblePath(path) && isFolderMetadata(path));
     if (!relevantPath(file.path) && !relevantPath(oldPath)) return;
     this.revision++;
     this.retryDelay = firstRetryMs;
     this.schedule(debounceMs);
+    this.noteControls?.refresh();
   }
 
   private async migrateSecret(previousId: string): Promise<void> {
@@ -190,7 +223,8 @@ export default class LangdockSyncPlugin extends Plugin {
     if (!this.hasApiKey() || !isId(settings.folderId) || !settings.folders.length) settings.automatic = false;
     if (settings.folderId === previous.folderId && settings.automatic === previous.automatic
       && settings.syncIntervalMinutes === previous.syncIntervalMinutes
-      && settings.folders === previous.folders && settings.propertyFilters === previous.propertyFilters) return;
+      && settings.folders === previous.folders && settings.propertyFilters === previous.propertyFilters
+      && settings.attachmentExtensions === previous.attachmentExtensions) return;
     try {
       await this.saveSettings(settings);
     } finally {
@@ -200,6 +234,7 @@ export default class LangdockSyncPlugin extends Plugin {
 
   private async saveSettings(settings: Settings): Promise<void> {
     this.config = settings;
+    this.noteControls?.refresh(true);
     this.retryDelay = firstRetryMs;
     this.automaticDue = false;
     this.clearTimer();
@@ -209,6 +244,7 @@ export default class LangdockSyncPlugin extends Plugin {
     } catch {
       if (this.config === settings) {
         this.config = { ...settings, automatic: false };
+        this.noteControls?.refresh(true);
         this.clearSyncInterval();
         this.status = { ...this.status, issues: [{ key: "errors.settingsSave" }] };
         this.tab?.renderStatus();
@@ -227,6 +263,7 @@ export default class LangdockSyncPlugin extends Plugin {
       ...this.status,
       language: this.languagePreference,
       introductionSeen: this.introductionSeen,
+      showNoteSyncButton: this.showNoteSyncButton,
     };
     const saved = this.saveQueue.then(() => this.saveData(data));
     this.saveQueue = saved.catch(() => {});
@@ -302,29 +339,70 @@ export default class LangdockSyncPlugin extends Plugin {
     return folders;
   }
 
-  private async prepare(settings: Settings): Promise<{
-    plan: Plan;
-    client: Langdock;
-    assertCurrent: () => void;
-  }> {
+  private syncConnection(settings: Settings) {
     if (!this.ready || this.stopped) throw new SyncError("errors.vaultNotReady");
     if (this.config !== settings) throw new StaleRun();
     if (!settings.folders.length) throw new SyncError("errors.folderRequired");
     const key = this.secret();
     if (!isId(settings.folderId)) throw new SyncError("errors.targetRequired");
-    const revision = this.revision;
-    const assertCurrent = () => {
-      if (this.stopped || this.config !== settings || this.revision !== revision
-        || this.storedKey() !== key) {
+    const assertConnection = () => {
+      if (this.stopped || this.config !== settings || this.storedKey() !== key) {
         throw new StaleRun();
       }
     };
+    return { client: new Langdock(key, requestUrl), assertConnection };
+  }
+
+  private startRun(settings: Settings) {
+    const { client, assertConnection } = this.syncConnection(settings);
+    const revision = this.revision;
+    const assertCurrent = () => {
+      assertConnection();
+      if (this.revision !== revision) throw new StaleRun();
+    };
+    return { client, assertCurrent };
+  }
+
+  async readEligibleFile(path: string, settings: Settings): Promise<SyncFile | null> {
+    if (!isInSyncScope(path, settings) || !this.app.vault.getFileByPath(path)) return null;
+    const result = await readSyncFile(this.app.vault.adapter, path, settings.propertyFilters);
+    return result?.file ?? null;
+  }
+
+  async readManagedFiles(settings: Settings): Promise<ManagedFile[]> {
+    return this.enqueue(async () => {
+      const { client, assertConnection } = this.syncConnection(settings);
+      const files = await client.managedFiles(settings.folderId);
+      assertConnection();
+      return files;
+    });
+  }
+
+  async syncFile(path: string): Promise<Issue | undefined> {
+    const settings = this.config;
+    return this.enqueue(async () => {
+      const { client, assertCurrent } = this.startRun(settings);
+      const file = await this.readEligibleFile(path, settings);
+      if (!file) throw new SyncError("errors.noteIneligible");
+      assertCurrent();
+      const remote = await client.managedFiles(settings.folderId);
+      const plan = planSingleFile(file, remote);
+      const report = await applyPlan(plan, this.app.vault.adapter, client, settings, true, assertCurrent);
+      return report.issues[0];
+    });
+  }
+
+  private async prepare(settings: Settings): Promise<{
+    plan: Plan;
+    client: Langdock;
+    assertCurrent: () => void;
+  }> {
+    const { client, assertCurrent } = this.startRun(settings);
     const { vault } = this.app;
-    const notes = await inventory(vault.adapter, vault.getFiles().map(({ path }) => path), settings, assertCurrent);
-    const client = new Langdock(key, requestUrl);
+    const files = await inventory(vault.adapter, vault.getFiles().map(({ path }) => path), settings, assertCurrent);
     const remote = await client.managedFiles(settings.folderId);
     assertCurrent();
-    return { plan: planSync(notes, remote), client, assertCurrent };
+    return { plan: planSync(files, remote), client, assertCurrent };
   }
 
   async showPreview(): Promise<void> {
@@ -392,6 +470,7 @@ export default class LangdockSyncPlugin extends Plugin {
       } finally {
         this.busy = false;
         this.tab?.renderStatus();
+        this.noteControls?.refresh(true);
       }
     });
   }

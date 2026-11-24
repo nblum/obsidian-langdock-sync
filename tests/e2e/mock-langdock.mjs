@@ -81,18 +81,22 @@ export async function prepareMockLangdock() {
       }
       if (pathname === "/knowledge/writer/list" && method === "GET") {
         await inventoryGate?.promise;
-        const inventory = [...files.values()].map(({ id, name, syncStatus }) => ({ id, name, syncStatus }));
+        const inventory = [...files.values()].map(({ id, name, syncStatus, createdAt }) => ({ id, name, syncStatus, createdAt }));
         return success(partial ? inventory.slice(0, -1) : inventory);
       }
       if (pathname === "/knowledge/writer" && method === "POST") {
         const contentType = request.headers["content-type"];
         const form = await new Response(await buffer(request), { headers: { "Content-Type": contentType } }).formData();
         const file = form.get("file");
-        if (!(file instanceof File) || file.type !== "text/markdown") return error(400);
+        if (!(file instanceof File)) return error(400);
+        const expectedType = file.name.endsWith(".pdf") ? "application/pdf" : "text/markdown";
+        if (file.type !== expectedType) return error(400);
         const id = `upload-${++sequence}`;
         const { name } = file;
         entry.id = id;
-        files.set(id, { id, name, syncStatus: nextStatus, bytes: Buffer.from(await file.arrayBuffer()).toString("base64") });
+        files.set(id, { id, name, syncStatus: nextStatus, createdAt: new Date().toISOString(),
+          bytes: Buffer.from(await file.arrayBuffer()).toString("base64"),
+        });
         nextStatus = "SYNCED";
         return success({ id, name });
       }

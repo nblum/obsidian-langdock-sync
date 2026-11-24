@@ -1,6 +1,7 @@
 import { Modal, PluginSettingTab, requireApiVersion, Setting } from "obsidian";
 import type { App, SettingDefinitionRender } from "obsidian";
 import { isVisiblePath, syncIntervals } from "./config.ts";
+import { supportedAttachmentExtensions } from "./file-formats.ts";
 import { renderAbout } from "./help.ts";
 import { formatIssue, isLanguagePreference, issueFromError, languageNames } from "./i18n.ts";
 import type { Issue, LanguagePreference, TranslationKey, Translator } from "./i18n.ts";
@@ -183,6 +184,38 @@ export class LangdockSettingTab extends PluginSettingTab {
       ...this.folderDefinitions(t),
       ...this.propertyDefinitions(t),
       {
+        name: t("settings.attachmentExtensions"),
+        desc: t("settings.attachmentExtensionsHelp"),
+        aliases: [t("settings.saveAttachmentExtensions")],
+        render: (setting) => {
+          const selected = new Set(this.plugin.config.attachmentExtensions.split(","));
+          setting.setClass("langdock-sync-attachments").setClass("langdock-sync-controls");
+          const group = setting.controlEl.createDiv({
+            cls: "langdock-sync-attachment-options",
+            attr: { role: "group", "aria-label": t("settings.attachmentExtensions") },
+          });
+          const checkboxes = supportedAttachmentExtensions.map((extension) => {
+            const label = group.createEl("label", { cls: "langdock-sync-attachment-option" });
+            const checkbox = label.createEl("input", { attr: { type: "checkbox", value: extension } });
+            checkbox.checked = selected.has(extension);
+            checkbox.disabled = this.changingKey;
+            label.append(`.${extension}`);
+            return checkbox;
+          });
+          setting.addButton((button) => {
+            button.setButtonText(t("settings.saveAttachmentExtensions")).setDisabled(true).onClick(() => {
+              const attachmentExtensions = checkboxes.filter(({ checked }) => checked).map(({ value }) => value).join(",");
+              void this.change({ attachmentExtensions });
+            });
+            group.addEventListener("change", () => {
+              const changed = checkboxes.some(({ checked, value }) => checked !== selected.has(value));
+              button.setDisabled(this.changingKey || !changed);
+            });
+          });
+          return () => { group.remove(); };
+        },
+      },
+      {
         name: t("settings.automatic"),
         desc: t("settings.automaticHelp"),
         render: (setting) => {
@@ -208,6 +241,21 @@ export class LangdockSettingTab extends PluginSettingTab {
                 if (minutes !== undefined) void this.change({ syncIntervalMinutes: minutes });
               });
           });
+        },
+      },
+      {
+        name: t("settings.noteSyncButton"),
+        desc: t("settings.noteSyncButtonHelp"),
+        render: (setting) => {
+          setting.addToggle((toggle) => toggle.setValue(this.plugin.showNoteSyncButton)
+            .onChange(async (enabled) => {
+              try {
+                await this.plugin.updateNoteSyncButton(enabled);
+              } catch (error) {
+                toggle.setValue(this.plugin.showNoteSyncButton);
+                this.plugin.notify(formatIssue(t, issueFromError(error)));
+              }
+            }));
         },
       },
       {
@@ -472,8 +520,8 @@ export class PreviewModal extends Modal {
       return;
     }
     const list = this.contentEl.createEl("ul");
-    for (const { note, versions, pending, failed } of transfers) {
-      const action = t(versions.length ? "preview.update" : "preview.upload", { path: note.path });
+    for (const { file, versions, pending, failed } of transfers) {
+      const action = t(versions.length ? "preview.update" : "preview.upload", { path: file.path });
       const detail = pending ? t("preview.indexing") : failed ? t("preview.retryIndexing") : "";
       list.createEl("li", { text: detail ? t("preview.withDetail", { action, detail }) : action });
     }

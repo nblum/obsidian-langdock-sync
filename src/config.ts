@@ -1,5 +1,6 @@
 import { isLanguagePreference, isStoredIssue } from "./i18n.ts";
 import type { Issue, LanguagePreference } from "./i18n.ts";
+import { supportedAttachmentExtensions } from "./file-formats.ts";
 
 export interface PropertyFilter {
   property: string;
@@ -14,6 +15,7 @@ export interface Settings {
   syncIntervalMinutes: typeof syncIntervals[number];
   folders: string[];
   propertyFilters: PropertyFilter[];
+  attachmentExtensions: string;
 }
 
 export interface SyncStatus {
@@ -28,6 +30,12 @@ export function isVisiblePath(path: string): boolean {
   return path.split("/").every((part) => part.length > 0 && !part.startsWith("."));
 }
 
+function parseAttachmentExtensions(value: string): string {
+  const entries = value.split(",").map((entry) => entry.trim().toLowerCase().replace(/^\./u, ""));
+  const supported = entries.filter((entry) => supportedAttachmentExtensions.includes(entry));
+  return [...new Set(supported)].join(",");
+}
+
 function isPropertyFilter(value: unknown): value is PropertyFilter {
   if (typeof value !== "object" || value === null) return false;
   const { property, value: expected } = value as Record<string, unknown>;
@@ -40,6 +48,7 @@ export function readData(data: unknown): {
   legacySecretId: string | null;
   language: LanguagePreference;
   introductionSeen: boolean;
+  showNoteSyncButton: boolean;
 } {
   const values = typeof data === "object" && data !== null ? data as Record<string, unknown> : {};
   const folderId = typeof values.folderId === "string" ? values.folderId : "";
@@ -57,10 +66,13 @@ export function readData(data: unknown): {
       syncIntervalMinutes: syncIntervals.find((minutes) => minutes === values.syncIntervalMinutes) ?? 0,
       folders,
       propertyFilters,
+      attachmentExtensions: typeof values.attachmentExtensions === "string"
+        ? parseAttachmentExtensions(values.attachmentExtensions) : "",
     },
     legacySecretId: typeof values.secretId === "string" ? values.secretId : null,
     language: isLanguagePreference(values.language) ? values.language : "auto",
     introductionSeen: values.introductionSeen === true,
+    showNoteSyncButton: values.showNoteSyncButton !== false,
     status: {
       lastSuccess: typeof values.lastSuccess === "string" && Number.isFinite(Date.parse(values.lastSuccess))
         ? values.lastSuccess : null,
