@@ -2,7 +2,7 @@ import { isMap, isScalar, isSeq, parseDocument } from "yaml";
 import type { YAMLMap } from "yaml";
 import { LocalizedError } from "./i18n.ts";
 import { isVisiblePath } from "./config.ts";
-import type { PropertyFilter, Settings } from "./config.ts";
+import type { PropertyFilter } from "./config.ts";
 import { fileExtension, uploadFormat } from "./file-formats.ts";
 
 const delimiter = /^---[ \t]*\r?$/u;
@@ -41,10 +41,6 @@ export function isCandidate(path: string, extensions: readonly string[] = []): b
   const extension = fileExtension(path);
   return extension !== "" && isVisiblePath(path) && filename(path).toLowerCase() !== metadataFilename
     && (extension === "md" || extensions.includes(extension));
-}
-
-export function isInSyncScope(path: string, { folders, attachmentExtensions }: Settings): boolean {
-  return isCandidate(path, attachmentExtensions.split(",")) && folders.some((folder) => folder === "/" || path.startsWith(`${folder}/`));
 }
 
 function scalarMatches(node: unknown, expected: string): boolean {
@@ -204,7 +200,7 @@ export async function readSyncFile(
 export async function inventory(
   storage: FileStorage,
   indexedPaths: readonly string[],
-  scope: Pick<Settings, "folders" | "propertyFilters" | "attachmentExtensions">,
+  scope: { folders: readonly string[]; propertyFilters: readonly PropertyFilter[]; attachmentExtensions: string },
   assertCurrent: () => void,
 ): Promise<Map<string, SyncFile>> {
   const roots = scope.folders.includes("/") ? [""] : scope.folders.filter((folder) =>

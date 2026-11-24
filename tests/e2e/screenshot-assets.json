@@ -1,8 +1,8 @@
 [
   { "filename": "introduction.webp", "description": "The first step of the Langdock Sync introduction" },
-  { "filename": "connection.webp", "description": "Connection settings with a selected knowledge base and a successful connection check" },
-  { "filename": "filters.webp", "description": "The selected vault folder and the default classification filter" },
-  { "filename": "preview.webp", "description": "A sync preview with a planned upload, update, and deletion" },
+  { "filename": "connection.webp", "description": "Connection settings with API key sharing instructions and a successful connection check" },
+  { "filename": "filters.webp", "description": "A vault folder assigned to a knowledge base and the default classification filter" },
+  { "filename": "preview.webp", "description": "A sync preview with the knowledge base and its planned changes" },
   { "filename": "sync-status.webp", "description": "Sync controls and the last successful sync" },
   { "filename": "about.webp", "description": "The About dialog with the plugin version, author, and links" }
 ]

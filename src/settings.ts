@@ -1,14 +1,14 @@
 import { Modal, PluginSettingTab, requireApiVersion, Setting } from "obsidian";
 import type { App, SettingDefinitionRender } from "obsidian";
-import { isVisiblePath, syncIntervals } from "./config.ts";
+import { isLangdockId, isVisiblePath, syncIntervals } from "./config.ts";
+import type { FolderMapping } from "./config.ts";
 import { supportedAttachmentExtensions } from "./file-formats.ts";
 import { renderAbout } from "./help.ts";
 import { formatIssue, isLanguagePreference, issueFromError, languageNames } from "./i18n.ts";
 import type { Issue, LanguagePreference, TranslationKey, Translator } from "./i18n.ts";
-import { isId } from "./langdock.ts";
 import type { Folder } from "./langdock.ts";
 import type LangdockSyncPlugin from "./main.ts";
-import type { Plan } from "./sync.ts";
+import type { TargetPlan } from "./sync.ts";
 
 interface StatusMessage {
   text: string;
@@ -137,37 +137,13 @@ export class LangdockSettingTab extends PluginSettingTab {
         );
       }),
       {
-        name: t("settings.knowledgeBase"),
-        desc: t("settings.editorHelp"),
-        render: (setting) => {
-          const { folderId } = this.plugin.config;
-          setting.addDropdown((dropdown) => {
-            dropdown.selectEl.setAttribute("aria-label", t("settings.knowledgeBase"));
-            dropdown.addOption("", t("settings.select"));
-            if (folderId && !this.targets.some(({ id }) => id === folderId)) {
-              dropdown.addOption(folderId, t("settings.savedTarget", { id: folderId }));
-              dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
-            }
-            for (const folder of this.targets) {
-              dropdown.addOption(folder.id, folder.role === "EDITOR" ? folder.name : t("settings.readOnlyTarget", { name: folder.name }));
-              if (folder.role !== "EDITOR") {
-                dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
-              }
-            }
-            dropdown.setDisabled(this.changingKey).setValue(folderId).onChange((nextFolderId) => {
-              if (nextFolderId && !this.targets.some(({ id, role }) => id === nextFolderId && role === "EDITOR")) return;
-              this.request++;
-              this.connectionMessage = null;
-              void this.change({ folderId: nextFolderId });
-            });
-          });
-        },
-      },
-      {
         name: t("settings.loadTargets"),
         aliases: [t("settings.testConnection")],
         render: (setting) => {
           const hasApiKey = this.hasUsableKey();
+          const help = setting.descEl.createSpan();
+          appendLinkedHelp(help, t("settings.editorHelp"), t("settings.sharingGuide"),
+            "https://docs.langdock.com/en/developer/knowledge-folder-api/sharing");
           setting.setName("").setClass("langdock-sync-controls")
             .addButton((button) => button.setButtonText(t("settings.loadTargets"))
               .setDisabled(!hasApiKey)
@@ -175,6 +151,7 @@ export class LangdockSettingTab extends PluginSettingTab {
             .addButton((button) => button.setButtonText(t("settings.testConnection"))
               .setDisabled(!hasApiKey)
               .onClick(() => { void this.refreshFolders(true); }));
+          return () => { help.remove(); };
         },
       },
       ...(connectionMessage ? [contentRow((container) => {
@@ -228,14 +205,14 @@ export class LangdockSettingTab extends PluginSettingTab {
         name: t("settings.interval"),
         desc: t("settings.intervalHelp"),
         render: (setting) => {
-          const { automatic, syncIntervalMinutes } = this.plugin.config;
+          const { syncIntervalMinutes } = this.plugin.config;
           setting.addDropdown((dropdown) => {
             dropdown.selectEl.setAttribute("aria-label", t("settings.interval"));
             for (const minutes of syncIntervals) {
               dropdown.addOption(String(minutes), t(`settings.interval.${minutes}`));
             }
             dropdown.setValue(String(syncIntervalMinutes))
-              .setDisabled(!automatic || Boolean(this.syncDisabledReason()))
+              .setDisabled(Boolean(this.syncDisabledReason()))
               .onChange((value) => {
                 const minutes = syncIntervals.find((interval) => String(interval) === value);
                 if (minutes !== undefined) void this.change({ syncIntervalMinutes: minutes });
@@ -271,7 +248,7 @@ export class LangdockSettingTab extends PluginSettingTab {
         },
       },
       contentRow((container) => {
-        this.open = true;
+        this.onSettingsRendered();
         this.statusEl = container.createDiv({ cls: "langdock-sync-status", attr: { role: "status" } });
         this.renderStatus();
       }),
@@ -282,12 +259,23 @@ export class LangdockSettingTab extends PluginSettingTab {
     return !this.changingKey && this.plugin.hasApiKey();
   }
 
+  private onSettingsRendered(): void {
+    if (this.open) return;
+    this.open = true;
+    if (!this.hasUsableKey() || !this.plugin.config.folderMappings.some(({ folderId }) =>
+      folderId && !this.plugin.savedTargetName(folderId))) return;
+    const request = this.request;
+    queueMicrotask(() => {
+      if (this.open && this.request === request) void this.refreshFolders(false);
+    });
+  }
+
   private syncDisabledReason(): TranslationKey | undefined {
-    const { folderId, folders } = this.plugin.config;
+    const { folderMappings } = this.plugin.config;
     if (this.changingKey) return "settings.keySaving";
     if (!this.plugin.hasApiKey()) return "errors.keyMissing";
-    if (!isId(folderId)) return "errors.targetRequired";
-    if (!folders.length) return "errors.folderRequired";
+    if (!folderMappings.length) return "errors.folderRequired";
+    if (folderMappings.some(({ folderId }) => !isLangdockId(folderId))) return "errors.targetRequired";
     return undefined;
   }
 
@@ -297,7 +285,7 @@ export class LangdockSettingTab extends PluginSettingTab {
   }
 
   private folderDefinitions(t: Translator): SettingsRow[] {
-    const { folders } = this.plugin.config;
+    const { folderMappings } = this.plugin.config;
     const folderName = (path: string) => path === "/" ? t("settings.vaultRoot") : path;
     return [
       heading(t("settings.manageFolders")),
@@ -306,33 +294,61 @@ export class LangdockSettingTab extends PluginSettingTab {
       }),
       {
         name: t("settings.folderPicker"),
-        aliases: [t("settings.addFolder")],
+        aliases: [t("settings.addFolder"), t("settings.knowledgeBase")],
         render: (setting) => {
           setting.setName("").addDropdown((dropdown) => {
             dropdown.selectEl.setAttribute("aria-label", t("settings.folderPicker"));
             dropdown.addOption("", t("settings.addFolder"));
             for (const path of this.availableFolders()) {
-              if (!folders.includes(path)) dropdown.addOption(path, folderName(path));
+              if (!folderMappings.some((mapping) => mapping.path === path)) dropdown.addOption(path, folderName(path));
             }
             dropdown.setDisabled(this.changingKey).onChange((path) => {
-              if (path) void this.change({ folders: [...folders, path] });
+              const current = this.plugin.config.folderMappings;
+              if (path && !current.some((mapping) => mapping.path === path)) {
+                this.changeMappings([...current, { path, folderId: "" }]);
+              }
             });
           });
         },
       },
-      ...folders.map((path): SettingsRow => ({
+      ...folderMappings.map(({ path, folderId }): SettingsRow => ({
         name: "",
         searchable: false,
         render: (setting) => {
           const label = folderName(path);
           setting.setName(label);
           if (path !== "/" && !this.app.vault.getFolderByPath(path)) setting.setDesc(t("settings.folderMissing"));
+          setting.addDropdown((dropdown) => {
+            dropdown.selectEl.setAttribute("aria-label", t("settings.folderTarget", { path: label }));
+            dropdown.addOption("", t("settings.select"));
+            dropdown.selectEl.options[0]?.setAttribute("disabled", "");
+            if (folderId && !this.targets.some(({ id }) => id === folderId)) {
+              dropdown.addOption(folderId, this.plugin.savedTargetName(folderId) ?? t("settings.savedTarget", { id: folderId }));
+              dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
+            }
+            for (const folder of this.targets) {
+              dropdown.addOption(folder.id, folder.role === "EDITOR" ? folder.name : t("settings.readOnlyTarget", { name: folder.name }));
+              if (folder.role !== "EDITOR") {
+                dropdown.selectEl.options[dropdown.selectEl.options.length - 1]?.setAttribute("disabled", "");
+              }
+            }
+            dropdown.setDisabled(this.changingKey).setValue(folderId).onChange((nextFolderId) => {
+              if (!this.targets.some(({ id, role }) => id === nextFolderId && role === "EDITOR")) return;
+              this.changeMappings(this.plugin.config.folderMappings.map((mapping) =>
+                mapping.path === path ? { path, folderId: nextFolderId } : mapping));
+            });
+          });
           setting.addExtraButton((button) => button.setIcon("x").setTooltip(t("settings.removeFolder", { name: label }))
             .setDisabled(this.changingKey)
-            .onClick(() => { void this.change({ folders: folders.filter((folder) => folder !== path) }); }));
+            .onClick(() => { this.changeMappings(this.plugin.config.folderMappings.filter((mapping) => mapping.path !== path)); }));
         },
       })),
     ];
+  }
+
+  private changeMappings(folderMappings: FolderMapping[]): void {
+    if (this.connectionMessage?.key === "status.connectionSuccess") this.connectionMessage = null;
+    void this.change({ folderMappings });
   }
 
   private propertyDefinitions(t: Translator): SettingsRow[] {
@@ -415,6 +431,7 @@ export class LangdockSettingTab extends PluginSettingTab {
   override hide(): void {
     this.open = false;
     this.request++;
+    if (this.connectionMessage?.key === "status.connecting") this.connectionMessage = null;
     delete this.statusEl;
   }
 
@@ -476,21 +493,27 @@ export class LangdockSettingTab extends PluginSettingTab {
 
   private async refreshFolders(test: boolean): Promise<void> {
     const request = ++this.request;
+    const mappings = this.plugin.config.folderMappings;
     this.connectionMessage = { key: "status.connecting", tone: "info" };
     this.refreshSettings();
     try {
       const folders = await this.plugin.discoverFolders(test);
       if (!this.open || this.request !== request) return;
       this.targets = folders;
+      void this.plugin.rememberTargetNames(folders).catch((error: unknown) => {
+        this.plugin.notify(formatIssue(this.plugin.translate, issueFromError(error)));
+      });
       if (!folders.length) {
         this.connectionMessage = { key: "status.targetsEmpty", tone: "info" };
       } else {
-        this.connectionMessage = test ? { key: "status.connectionSuccess", tone: "success" } : null;
+        this.connectionMessage = test && this.plugin.config.folderMappings === mappings
+          ? { key: "status.connectionSuccess", tone: "success" } : null;
       }
     } catch (error) {
       if (!this.open || this.request !== request) return;
-      this.targets = [];
-      this.connectionMessage = { ...issueFromError(error), tone: "error" };
+      if (!test) this.targets = [];
+      this.connectionMessage = test && this.plugin.config.folderMappings !== mappings
+        ? null : { ...issueFromError(error), tone: "error" };
     }
     this.refreshSettings();
   }
@@ -512,21 +535,25 @@ export class PreviewModal extends Modal {
     });
   }
 
-  showPlan({ transfers, removals }: Plan): void {
+  showPlans(plans: readonly TargetPlan[]): void {
     const t = this.translate;
     this.contentEl.empty();
-    if (!transfers.length && !removals.length) {
+    const changed = plans.filter(({ plan }) => plan.transfers.length || plan.removals.length);
+    if (!changed.length) {
       this.contentEl.createEl("p", { text: t("preview.empty") });
       return;
     }
-    const list = this.contentEl.createEl("ul");
-    for (const { file, versions, pending, failed } of transfers) {
-      const action = t(versions.length ? "preview.update" : "preview.upload", { path: file.path });
-      const detail = pending ? t("preview.indexing") : failed ? t("preview.retryIndexing") : "";
-      list.createEl("li", { text: detail ? t("preview.withDetail", { action, detail }) : action });
-    }
-    for (const { file, path } of removals) {
-      list.createEl("li", { text: path ? t("preview.deleteOld", { path }) : t("preview.delete", { name: file.name }) });
+    for (const { target, plan } of changed) {
+      this.contentEl.createEl("h3", { text: target.name });
+      const list = this.contentEl.createEl("ul");
+      for (const { file, versions, pending, failed } of plan.transfers) {
+        const action = t(versions.length ? "preview.update" : "preview.upload", { path: file.path });
+        const detail = pending ? t("preview.indexing") : failed ? t("preview.retryIndexing") : "";
+        list.createEl("li", { text: detail ? t("preview.withDetail", { action, detail }) : action });
+      }
+      for (const { file, path, movedPath } of plan.removals) {
+        list.createEl("li", { text: path ? t("preview.deleteOld", { path }) : t("preview.delete", { name: movedPath ?? file.name }) });
+      }
     }
   }
 

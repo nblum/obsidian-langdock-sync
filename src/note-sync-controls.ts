@@ -1,7 +1,7 @@
 import { ButtonComponent, EditableFileView, Modal, setTooltip } from "obsidian";
+import { findFolderMapping, isLangdockId } from "./config.ts";
 import { formatIssue, issueFromError } from "./i18n.ts";
 import type { Issue } from "./i18n.ts";
-import { isId } from "./langdock.ts";
 import type { ManagedFile } from "./langdock.ts";
 import type LangdockSyncPlugin from "./main.ts";
 import type { SyncFile } from "./notes.ts";
@@ -70,7 +70,7 @@ class NoteSyncModal extends Modal {
     this.issueEl.setText(detail ? formatIssue(t, detail) : "");
     this.issueEl.hidden = !detail || syncing;
     this.action.setButtonText(t("commands.syncNow")).setDisabled(syncing || state === "checking" || state === "ineligible"
-      || !isId(config.folderId) || !this.plugin.hasApiKey());
+      || !isLangdockId(findFolderMapping(this.path, config.folderMappings)?.folderId) || !this.plugin.hasApiKey());
   }
 
   override onClose(): void {
@@ -87,7 +87,7 @@ interface NoteButton {
 export class NoteSyncControls {
   private readonly buttons = new Map<EditableFileView, NoteButton>();
   private readonly syncing = new Set<string>();
-  private remote: Promise<RemoteInventory> | undefined;
+  private readonly remote = new Map<string, Promise<RemoteInventory>>();
   private dialog?: NoteSyncModal;
   private timer: number | undefined;
   private generation = 0;
@@ -99,7 +99,7 @@ export class NoteSyncControls {
     if (this.disposed) return;
     window.clearTimeout(this.timer);
     const generation = ++this.generation;
-    if (recheckRemote) this.remote = undefined;
+    if (recheckRemote) this.remote.clear();
     if (!this.plugin.showNoteSyncButton) {
       this.clear();
       return;
@@ -116,7 +116,7 @@ export class NoteSyncControls {
 
   private clear(): void {
     for (const view of this.buttons.keys()) this.removeButton(view);
-    this.remote = undefined;
+    this.remote.clear();
     this.dialog?.close();
   }
 
@@ -129,37 +129,44 @@ export class NoteSyncControls {
     const dialog = this.dialog;
     const paths = new Set(views.values());
     if (dialog) paths.add(dialog.path);
-    const files = new Map<string, SyncFile>();
+    const files = new Map<string, { file: SyncFile; folderId: string }>();
     for (const path of paths) {
-      const file = await this.plugin.readEligibleFile(path, settings).catch(() => null);
+      const routed = await this.plugin.readEligibleFile(path, settings).catch(() => null);
       if (this.generation !== generation) return;
-      if (file) files.set(path, file);
+      if (routed) files.set(path, routed);
     }
 
     for (const [view, control] of this.buttons) {
       if (views.get(view) === control.path && files.get(control.path) && view.containerEl.contains(control.button)) continue;
       this.removeButton(view);
     }
-    const needsRemote = !this.remote;
     for (const [view, path] of views) {
-      if (!files.get(path) || view.file?.path !== path) continue;
+      const routed = files.get(path);
+      if (!routed || view.file?.path !== path) continue;
       const control = this.buttons.get(view) ?? this.addButton(view, path);
-      if (needsRemote || !control.button.dataset.state) this.renderButton(control.button, "checking");
+      if (!this.remote.has(routed.folderId) || !control.button.dataset.state) this.renderButton(control.button, "checking");
     }
 
     if (dialog === this.dialog && dialog && !files.get(dialog.path)) dialog.render({ state: "ineligible" }, this.syncing.has(dialog.path));
     if (!files.size) return;
-    this.remote ??= this.plugin.readManagedFiles(settings).then((files) => ({ files }), (error: unknown) => ({ issue: issueFromError(error) }));
-    const remote = await this.remote;
+    const statuses = new Map(await Promise.all([...files].map(async ([path, { file, folderId }]) => {
+      let remote = this.remote.get(folderId);
+      if (!remote) {
+        remote = this.plugin.readManagedFiles(settings, folderId)
+          .then((files) => ({ files }), (error: unknown) => ({ issue: issueFromError(error) }));
+        this.remote.set(folderId, remote);
+      }
+      return [path, noteStatus(file, await remote)] as const;
+    })));
     if (this.generation !== generation) return;
 
     for (const { path, button } of this.buttons.values()) {
-      const file = files.get(path);
-      if (file) this.renderButton(button, noteStatus(file, remote).state);
+      const status = statuses.get(path);
+      if (status) this.renderButton(button, status.state);
     }
     if (dialog === this.dialog && dialog) {
-      const file = files.get(dialog.path);
-      if (file) dialog.render(noteStatus(file, remote), this.syncing.has(dialog.path));
+      const status = statuses.get(dialog.path);
+      if (status) dialog.render(status, this.syncing.has(dialog.path));
     }
   }
 

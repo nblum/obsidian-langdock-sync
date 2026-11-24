@@ -2,7 +2,7 @@ import type { Settings } from "./config.ts";
 import { LocalizedError } from "./i18n.ts";
 import type { Issue } from "./i18n.ts";
 import { isFailed, SyncError } from "./langdock.ts";
-import type { IndexStatus, Langdock, ManagedFile } from "./langdock.ts";
+import type { Folder, IndexStatus, Langdock, ManagedFile } from "./langdock.ts";
 import { readSyncFile } from "./notes.ts";
 import type { FileStorage, SyncFile } from "./notes.ts";
 
@@ -16,6 +16,7 @@ interface Transfer {
 interface Removal {
   file: ManagedFile;
   path?: string;
+  movedPath?: string;
 }
 
 export interface Plan {
@@ -23,19 +24,29 @@ export interface Plan {
   removals: Removal[];
 }
 
+export interface TargetPlan {
+  target: Pick<Folder, "id" | "name">;
+  plan: Plan;
+}
+
 export interface RunReport {
   issues: Issue[];
   retry: boolean;
 }
 
-export function planSync(local: ReadonlyMap<string, SyncFile>, files: readonly ManagedFile[]): Plan {
+export function planSync(
+  local: ReadonlyMap<string, SyncFile>,
+  files: readonly ManagedFile[],
+  allLocal: ReadonlyMap<string, SyncFile> = local,
+): Plan {
   const versions = new Map<string, ManagedFile[]>();
   const removals: Removal[] = [];
   const transfers: Transfer[] = [];
 
   for (const file of files) {
     if (!local.has(file.pathHash)) {
-      removals.push({ file });
+      const moved = allLocal.get(file.pathHash);
+      removals.push(moved ? { file, movedPath: moved.path } : { file });
       continue;
     }
     const entries = versions.get(file.pathHash) ?? [];
@@ -103,7 +114,7 @@ export async function applyPlan(
   plan: Plan,
   storage: FileStorage,
   client: Langdock,
-  settings: Pick<Settings, "folderId" | "propertyFilters">,
+  settings: Pick<Settings, "propertyFilters"> & { folderId: string },
   retryFailed: boolean,
   assertCurrent: () => void,
 ): Promise<RunReport> {
@@ -138,6 +149,35 @@ export async function applyPlan(
       if (!(error instanceof IndexIssue || (error instanceof SyncError && !error.retry))) throw error;
       report.issues.push({ ...error.issue, path: file.path });
       report.retry ||= error.retry;
+    }
+  }
+  assertCurrent();
+  return report;
+}
+
+export async function applyTargetPlans(
+  plans: readonly TargetPlan[],
+  storage: FileStorage,
+  client: Langdock,
+  settings: Pick<Settings, "propertyFilters">,
+  retryFailed: boolean,
+  assertCurrent: () => void,
+): Promise<RunReport> {
+  const report: RunReport = { issues: [], retry: false };
+  for (const { target, plan } of plans) {
+    const changes = { ...plan, removals: plan.removals.filter(({ movedPath }) => movedPath === undefined) };
+    const result = await applyPlan(changes, storage, client, { ...settings, folderId: target.id }, retryFailed, assertCurrent);
+    report.issues.push(...result.issues);
+    report.retry ||= result.retry;
+  }
+
+  // A move can drop its source only after the destination has an indexed copy.
+  const failed = new Set(report.issues.map(({ path }) => path));
+  for (const { target, plan } of plans) {
+    for (const { file, movedPath } of plan.removals) {
+      if (movedPath === undefined || failed.has(movedPath)) continue;
+      assertCurrent();
+      await client.delete(target.id, file.id);
     }
   }
   assertCurrent();

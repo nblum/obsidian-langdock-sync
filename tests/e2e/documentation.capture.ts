@@ -132,15 +132,15 @@ describe("Langdock Sync documentation screenshots (opt-in)", () => {
     let mainWindow = await openCaptureSettings();
     await $('input[aria-label="Langdock API key"]').setValue("simulated-key");
     await $("button=Save key").click();
-    const target = 'select[aria-label="Knowledge base"]:not([aria-hidden="true"])';
+    await $('select[aria-label="Folders to sync"]:not([aria-hidden="true"])').selectByAttribute("value", "Knowledge");
+    await expect($(".setting-item-name=Knowledge")).toExist();
+    const target = 'select[aria-label="Knowledge base for Knowledge"]:not([aria-hidden="true"])';
     await expect($(`${target} option[value="writer"]`)).toHaveText("Product handbook");
     await $(target).selectByAttribute("value", "writer");
     await $("button=Test connection").click();
     await expect($('.langdock-sync-message--success[role="status"]')).toHaveText("Connection successful.");
     await captureSettings("connection.webp", "Langdock connection", ".langdock-sync-message--success");
 
-    await $('select[aria-label="Folders to sync"]:not([aria-hidden="true"])').selectByAttribute("value", "Knowledge");
-    await expect($(".setting-item-name=Knowledge")).toExist();
     await expect($(".setting-item-name=classification = public")).toExist();
     await captureSettings("filters.webp", "Manage folders", "classification = public");
     await closeSettings(mainWindow);

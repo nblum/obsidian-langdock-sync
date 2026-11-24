@@ -5,6 +5,7 @@ interface RemoteFile {
   id: string;
   name: string;
   syncStatus: string;
+  folderId?: string;
   createdAt?: string;
   bytes?: string;
 }
@@ -34,7 +35,7 @@ export async function control(command: {
   reset?: boolean;
   seed?: RemoteFile[];
   offline?: boolean;
-  partial?: boolean;
+  partial?: boolean | string;
   holdInventory?: boolean;
   nextStatus?: string;
   statuses?: Record<string, string>;

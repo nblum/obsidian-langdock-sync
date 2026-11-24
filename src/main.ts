@@ -1,21 +1,25 @@
 import { getLanguage, Notice, Plugin, requestUrl, TFolder } from "obsidian";
 import type { Command, Modal, TAbstractFile } from "obsidian";
-import { apiKeySecretId, emptyStatus, isVisiblePath, readData } from "./config.ts";
+import { apiKeySecretId, emptyStatus, findFolderMapping, isLangdockId, isVisiblePath, readData } from "./config.ts";
 import type { Settings, SyncStatus } from "./config.ts";
 import { AboutModal, IntroductionModal } from "./help.ts";
 import { createTranslator, formatIssue, issueFromError, resolveLanguage } from "./i18n.ts";
 import type { Issue, Language, LanguagePreference, TranslationKey } from "./i18n.ts";
-import { isId, Langdock, SyncError } from "./langdock.ts";
+import { Langdock, SyncError } from "./langdock.ts";
 import type { Folder, ManagedFile } from "./langdock.ts";
 import { NoteSyncControls } from "./note-sync-controls.ts";
-import { IncompleteInventory, inventory, isCandidate, isFolderMetadata, isInSyncScope, readSyncFile } from "./notes.ts";
+import { IncompleteInventory, inventory, isCandidate, isFolderMetadata, readSyncFile } from "./notes.ts";
 import type { SyncFile } from "./notes.ts";
 import { LangdockSettingTab, PreviewModal } from "./settings.ts";
-import { applyPlan, planSingleFile, planSync, StaleRun } from "./sync.ts";
-import type { Plan } from "./sync.ts";
+import { applyPlan, applyTargetPlans, planSingleFile, planSync, StaleRun } from "./sync.ts";
+import type { TargetPlan } from "./sync.ts";
 
 const debounceMs = 1_200;
 const firstRetryMs = 30_000;
+
+function clearTargets(settings: Settings): Settings {
+  return { ...settings, automatic: false, folderMappings: settings.folderMappings.map(({ path }) => ({ path, folderId: "" })) };
+}
 
 export default class LangdockSyncPlugin extends Plugin {
   config!: Settings;
@@ -31,6 +35,7 @@ export default class LangdockSyncPlugin extends Plugin {
   private previewDialog?: PreviewModal;
   private noteControls?: NoteSyncControls;
   private introductionSeen = false;
+  private targetNames = new Map<string, string>();
   private tab?: LangdockSettingTab;
   private ready = false;
   private stopped = false;
@@ -45,9 +50,11 @@ export default class LangdockSyncPlugin extends Plugin {
   private saveQueue = Promise.resolve();
 
   override async onload(): Promise<void> {
-    const { settings, status, legacySecretId, language, introductionSeen, showNoteSyncButton } = readData(await this.loadData() as unknown);
+    const { settings, status, targetNames, legacySecretId, language, introductionSeen, showNoteSyncButton } =
+      readData(await this.loadData() as unknown);
     this.config = settings;
     this.status = status;
+    this.targetNames = targetNames;
     this.introductionSeen = introductionSeen;
     this.showNoteSyncButton = showNoteSyncButton;
     this.setLanguage(language);
@@ -185,13 +192,14 @@ export default class LangdockSyncPlugin extends Plugin {
           this.app.secretStorage.setSecret(apiKeySecretId, previousKey);
         } else if (fixedKey !== previousKey) {
           // An existing fixed entry may belong to a different Langdock workspace.
-          this.config = { ...this.config, folderId: "", automatic: false };
+          this.config = clearTargets(this.config);
+          this.targetNames.clear();
           this.status = emptyStatus;
         }
       }
       await this.persist();
     } catch {
-      this.config = { ...this.config, automatic: false };
+      this.config = { ...this.config, automatic: false, syncIntervalMinutes: 0 };
       this.status = { ...this.status, issues: [{ key: "errors.keyMigration" }] };
     }
   }
@@ -200,12 +208,18 @@ export default class LangdockSyncPlugin extends Plugin {
     return Boolean(this.storedKey());
   }
 
+  private canScheduleSync(settings: Settings): boolean {
+    return this.hasApiKey() && settings.folderMappings.length > 0
+      && settings.folderMappings.every(({ folderId }) => isLangdockId(folderId));
+  }
+
   async updateApiKey(value: string): Promise<void> {
     const key = value.trim();
     if (!key) throw new SyncError("errors.keyRequired");
     if (key === this.storedKey()) return;
     this.status = emptyStatus;
-    await this.saveSettings({ ...this.config, folderId: "", automatic: false });
+    this.targetNames.clear();
+    await this.saveSettings(clearTargets(this.config));
     try {
       this.app.secretStorage.setSecret(apiKeySecretId, key);
     } catch {
@@ -216,14 +230,14 @@ export default class LangdockSyncPlugin extends Plugin {
   async updateSettings(next: Partial<Settings>): Promise<void> {
     const previous = this.config;
     const settings = { ...previous, ...next };
-    if (settings.folderId !== previous.folderId) {
+    if (settings.folderMappings !== previous.folderMappings) {
       settings.automatic = false;
       this.status = emptyStatus;
     }
-    if (!this.hasApiKey() || !isId(settings.folderId) || !settings.folders.length) settings.automatic = false;
-    if (settings.folderId === previous.folderId && settings.automatic === previous.automatic
+    if (!this.canScheduleSync(settings)) settings.automatic = false;
+    if (settings.folderMappings === previous.folderMappings && settings.automatic === previous.automatic
       && settings.syncIntervalMinutes === previous.syncIntervalMinutes
-      && settings.folders === previous.folders && settings.propertyFilters === previous.propertyFilters
+      && settings.propertyFilters === previous.propertyFilters
       && settings.attachmentExtensions === previous.attachmentExtensions) return;
     try {
       await this.saveSettings(settings);
@@ -243,7 +257,7 @@ export default class LangdockSyncPlugin extends Plugin {
       await this.persist();
     } catch {
       if (this.config === settings) {
-        this.config = { ...settings, automatic: false };
+        this.config = { ...settings, automatic: false, syncIntervalMinutes: 0 };
         this.noteControls?.refresh(true);
         this.clearSyncInterval();
         this.status = { ...this.status, issues: [{ key: "errors.settingsSave" }] };
@@ -258,9 +272,14 @@ export default class LangdockSyncPlugin extends Plugin {
   }
 
   private persist(): Promise<void> {
+    const targetNames = Object.fromEntries(this.config.folderMappings.flatMap(({ folderId }) => {
+      const name = this.targetNames.get(folderId);
+      return name ? [[folderId, name] as const] : [];
+    }));
     const data = {
       ...this.config,
       ...this.status,
+      targetNames,
       language: this.languagePreference,
       introductionSeen: this.introductionSeen,
       showNoteSyncButton: this.showNoteSyncButton,
@@ -281,11 +300,12 @@ export default class LangdockSyncPlugin extends Plugin {
   }
 
   private startSyncInterval(): void {
-    const { automatic, syncIntervalMinutes } = this.config;
-    if (this.intervalTimer !== undefined || !this.ready || this.stopped || !automatic || !syncIntervalMinutes) return;
+    const { syncIntervalMinutes } = this.config;
+    if (this.intervalTimer !== undefined || !this.ready || this.stopped || !syncIntervalMinutes
+      || !this.canScheduleSync(this.config)) return;
     this.intervalTimer = window.setInterval(() => {
       if (this.timer !== undefined || this.automaticJob || this.manualJob) return;
-      this.schedule(0);
+      this.runAutomaticSync();
     }, syncIntervalMinutes * 60_000);
   }
 
@@ -294,23 +314,27 @@ export default class LangdockSyncPlugin extends Plugin {
     this.clearTimer();
     this.timer = window.setTimeout(() => {
       this.timer = undefined;
-      if (this.automaticJob) {
-        this.automaticDue = true;
-        return;
-      }
-      this.automaticJob = true;
-      void this.sync(false).finally(() => {
-        this.automaticJob = false;
-        if (this.automaticDue) {
-          this.automaticDue = false;
-          if (this.timer === undefined) this.schedule(0);
-        }
-      });
+      this.runAutomaticSync();
     }, delay);
   }
 
+  private runAutomaticSync(): void {
+    if (this.automaticJob) {
+      this.automaticDue = true;
+      return;
+    }
+    this.automaticJob = true;
+    void this.sync(false).finally(() => {
+      this.automaticJob = false;
+      if (this.automaticDue) {
+        this.automaticDue = false;
+        if (this.timer === undefined) this.schedule(0);
+      }
+    });
+  }
+
   private retrySoon(): void {
-    if (this.timer !== undefined || this.automaticDue) return;
+    if (!this.config.automatic || this.timer !== undefined || this.automaticDue) return;
     this.schedule(this.retryDelay);
     this.retryDelay = Math.min(this.retryDelay * 2, 300_000);
   }
@@ -333,18 +357,43 @@ export default class LangdockSyncPlugin extends Plugin {
 
   async discoverFolders(testTarget: boolean): Promise<Folder[]> {
     const settings = this.config;
-    const client = new Langdock(this.secret(), requestUrl);
+    const key = this.secret();
+    const client = new Langdock(key, requestUrl);
     const folders = await client.folders();
-    if (testTarget && settings.folderId) await client.managedFiles(settings.folderId, folders);
+    if (testTarget) {
+      const ids = new Set(settings.folderMappings.map(({ folderId }) => folderId).filter(isLangdockId));
+      for (const folderId of ids) await client.managedFiles(folderId, folders);
+    }
+    if (this.stopped || this.storedKey() !== key) throw new StaleRun();
     return folders;
+  }
+
+  savedTargetName(folderId: string): string | undefined {
+    return this.targetNames.get(folderId);
+  }
+
+  async rememberTargetNames(folders: readonly Folder[]): Promise<void> {
+    const assignedIds = new Set(this.config.folderMappings.map(({ folderId }) => folderId));
+    let hasAssignedName = false;
+    for (const { id, name } of folders) {
+      if (!name.trim()) continue;
+      this.targetNames.set(id, name);
+      hasAssignedName ||= assignedIds.has(id);
+    }
+    if (hasAssignedName) {
+      try {
+        await this.persist();
+      } catch {
+        throw new SyncError("errors.settingsSave");
+      }
+    }
   }
 
   private syncConnection(settings: Settings) {
     if (!this.ready || this.stopped) throw new SyncError("errors.vaultNotReady");
     if (this.config !== settings) throw new StaleRun();
-    if (!settings.folders.length) throw new SyncError("errors.folderRequired");
+    if (!settings.folderMappings.length) throw new SyncError("errors.folderRequired");
     const key = this.secret();
-    if (!isId(settings.folderId)) throw new SyncError("errors.targetRequired");
     const assertConnection = () => {
       if (this.stopped || this.config !== settings || this.storedKey() !== key) {
         throw new StaleRun();
@@ -363,16 +412,18 @@ export default class LangdockSyncPlugin extends Plugin {
     return { client, assertCurrent };
   }
 
-  async readEligibleFile(path: string, settings: Settings): Promise<SyncFile | null> {
-    if (!isInSyncScope(path, settings) || !this.app.vault.getFileByPath(path)) return null;
+  async readEligibleFile(path: string, settings: Settings): Promise<{ file: SyncFile; folderId: string } | null> {
+    const mapping = findFolderMapping(path, settings.folderMappings);
+    if (!mapping || !isLangdockId(mapping.folderId) || !isCandidate(path, settings.attachmentExtensions.split(","))
+      || !this.app.vault.getFileByPath(path)) return null;
     const result = await readSyncFile(this.app.vault.adapter, path, settings.propertyFilters);
-    return result?.file ?? null;
+    return result ? { file: result.file, folderId: mapping.folderId } : null;
   }
 
-  async readManagedFiles(settings: Settings): Promise<ManagedFile[]> {
+  async readManagedFiles(settings: Settings, folderId: string): Promise<ManagedFile[]> {
     return this.enqueue(async () => {
       const { client, assertConnection } = this.syncConnection(settings);
-      const files = await client.managedFiles(settings.folderId);
+      const files = await client.managedFiles(folderId);
       assertConnection();
       return files;
     });
@@ -382,27 +433,44 @@ export default class LangdockSyncPlugin extends Plugin {
     const settings = this.config;
     return this.enqueue(async () => {
       const { client, assertCurrent } = this.startRun(settings);
-      const file = await this.readEligibleFile(path, settings);
-      if (!file) throw new SyncError("errors.noteIneligible");
+      const routed = await this.readEligibleFile(path, settings);
+      if (!routed) throw new SyncError("errors.noteIneligible");
+      const { file, folderId } = routed;
       assertCurrent();
-      const remote = await client.managedFiles(settings.folderId);
+      const remote = await client.managedFiles(folderId);
       const plan = planSingleFile(file, remote);
-      const report = await applyPlan(plan, this.app.vault.adapter, client, settings, true, assertCurrent);
+      const report = await applyPlan(plan, this.app.vault.adapter, client, { ...settings, folderId }, true, assertCurrent);
       return report.issues[0];
     });
   }
 
   private async prepare(settings: Settings): Promise<{
-    plan: Plan;
+    plans: TargetPlan[];
     client: Langdock;
     assertCurrent: () => void;
   }> {
     const { client, assertCurrent } = this.startRun(settings);
+    if (settings.folderMappings.some(({ folderId }) => !isLangdockId(folderId))) throw new SyncError("errors.targetRequired");
     const { vault } = this.app;
-    const files = await inventory(vault.adapter, vault.getFiles().map(({ path }) => path), settings, assertCurrent);
-    const remote = await client.managedFiles(settings.folderId);
+    const scope = { ...settings, folders: settings.folderMappings.map(({ path }) => path) };
+    const files = await inventory(vault.adapter, vault.getFiles().map(({ path }) => path), scope, assertCurrent);
+    const byTarget = new Map(settings.folderMappings.map(({ folderId }) => [folderId, new Map<string, SyncFile>()]));
+    for (const [hash, file] of files) {
+      const mapping = findFolderMapping(file.path, settings.folderMappings);
+      const targetFiles = mapping && byTarget.get(mapping.folderId);
+      if (!targetFiles) throw new StaleRun();
+      targetFiles.set(hash, file);
+    }
+    const folders = await client.folders();
+    const plans: TargetPlan[] = [];
+    for (const [folderId, local] of byTarget) {
+      assertCurrent();
+      const remote = await client.managedFiles(folderId, folders);
+      const name = folders.find(({ id }) => id === folderId)?.name ?? folderId;
+      plans.push({ target: { id: folderId, name }, plan: planSync(local, remote, files) });
+    }
     assertCurrent();
-    return { plan: planSync(files, remote), client, assertCurrent };
+    return { plans, client, assertCurrent };
   }
 
   async showPreview(): Promise<void> {
@@ -417,10 +485,10 @@ export default class LangdockSyncPlugin extends Plugin {
     try {
       await this.enqueue(async () => {
         if (this.previewDialog !== dialog) return;
-        const { plan, assertCurrent } = await this.prepare(settings);
+        const { plans, assertCurrent } = await this.prepare(settings);
         if (this.previewDialog !== dialog) return;
         assertCurrent();
-        dialog.showPlan(plan);
+        dialog.showPlans(plans);
       });
     } catch (error) {
       if (this.previewDialog === dialog) dialog.showError(issueFromError(error));
@@ -435,15 +503,15 @@ export default class LangdockSyncPlugin extends Plugin {
   private sync(manual: boolean): Promise<void> {
     const settings = this.config;
     return this.enqueue(async () => {
-      if (this.stopped || this.config !== settings || (!manual && !settings.automatic)) return;
+      if (this.stopped || this.config !== settings) return;
       this.busy = true;
       this.tab?.renderStatus();
 
       let issues: Issue[];
       let retry: boolean;
       try {
-        const { plan, client, assertCurrent } = await this.prepare(settings);
-        const report = await applyPlan(plan, this.app.vault.adapter, client, settings, manual, assertCurrent);
+        const { plans, client, assertCurrent } = await this.prepare(settings);
+        const report = await applyTargetPlans(plans, this.app.vault.adapter, client, settings, manual, assertCurrent);
         issues = report.issues;
         retry = report.retry;
       } catch (error) {

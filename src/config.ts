@@ -7,13 +7,17 @@ export interface PropertyFilter {
   value: string;
 }
 
+export interface FolderMapping {
+  path: string;
+  folderId: string;
+}
+
 export const syncIntervals = [0, 15, 30, 60, 120] as const;
 
 export interface Settings {
-  folderId: string;
+  folderMappings: FolderMapping[];
   automatic: boolean;
   syncIntervalMinutes: typeof syncIntervals[number];
-  folders: string[];
   propertyFilters: PropertyFilter[];
   attachmentExtensions: string;
 }
@@ -28,6 +32,36 @@ export const emptyStatus: SyncStatus = { lastSuccess: null, issues: [] };
 
 export function isVisiblePath(path: string): boolean {
   return path.split("/").every((part) => part.length > 0 && !part.startsWith("."));
+}
+
+export function isLangdockId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !/[^a-zA-Z0-9_-]/u.test(value);
+}
+
+export function findFolderMapping(path: string, mappings: readonly FolderMapping[]): FolderMapping | undefined {
+  let best: FolderMapping | undefined;
+  for (const mapping of mappings) {
+    if (mapping.path === "/" || path.startsWith(`${mapping.path}/`)) {
+      if (!best || best.path === "/" || mapping.path.length > best.path.length) {
+        best = mapping;
+      }
+    }
+  }
+  return best;
+}
+
+function readFolderMappings(values: Record<string, unknown>): FolderMapping[] {
+  const mappings = new Map<string, FolderMapping>();
+  const legacyId = isLangdockId(values.folderId) ? values.folderId : "";
+  const entries: unknown[] = Array.isArray(values.folderMappings) ? values.folderMappings
+    : Array.isArray(values.folders) ? values.folders.map((path: unknown) => ({ path, folderId: legacyId })) : [];
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { path, folderId } = entry as Record<string, unknown>;
+    if (typeof path !== "string" || (path !== "/" && !isVisiblePath(path)) || mappings.has(path)) continue;
+    mappings.set(path, { path, folderId: isLangdockId(folderId) ? folderId : "" });
+  }
+  return [...mappings.values()];
 }
 
 function parseAttachmentExtensions(value: string): string {
@@ -45,30 +79,34 @@ function isPropertyFilter(value: unknown): value is PropertyFilter {
 export function readData(data: unknown): {
   settings: Settings;
   status: SyncStatus;
+  targetNames: Map<string, string>;
   legacySecretId: string | null;
   language: LanguagePreference;
   introductionSeen: boolean;
   showNoteSyncButton: boolean;
 } {
   const values = typeof data === "object" && data !== null ? data as Record<string, unknown> : {};
-  const folderId = typeof values.folderId === "string" ? values.folderId : "";
-  const folders = Array.isArray(values.folders)
-    ? [...new Set((values.folders as unknown[]).filter((path): path is string =>
-      typeof path === "string" && (path === "/" || isVisiblePath(path))))]
-    : [];
+  const folderMappings = readFolderMappings(values);
+  const assignedIds = new Set(folderMappings.map(({ folderId }) => folderId).filter(Boolean));
+  const targetNames = new Map<string, string>();
+  if (typeof values.targetNames === "object" && values.targetNames !== null) {
+    for (const [id, name] of Object.entries(values.targetNames)) {
+      if (assignedIds.has(id) && typeof name === "string" && name.trim()) targetNames.set(id, name);
+    }
+  }
   const propertyFilters = Array.isArray(values.propertyFilters) && (values.propertyFilters as unknown[]).every(isPropertyFilter)
     ? values.propertyFilters as PropertyFilter[]
     : [{ property: "classification", value: "public" }];
   return {
     settings: {
-      folderId,
-      automatic: values.automatic === true && !!folderId && folders.length > 0,
+      folderMappings,
+      automatic: values.automatic === true && folderMappings.length > 0 && folderMappings.every(({ folderId }) => !!folderId),
       syncIntervalMinutes: syncIntervals.find((minutes) => minutes === values.syncIntervalMinutes) ?? 0,
-      folders,
       propertyFilters,
       attachmentExtensions: typeof values.attachmentExtensions === "string"
         ? parseAttachmentExtensions(values.attachmentExtensions) : "",
     },
+    targetNames,
     legacySecretId: typeof values.secretId === "string" ? values.secretId : null,
     language: isLanguagePreference(values.language) ? values.language : "auto",
     introductionSeen: values.introductionSeen === true,

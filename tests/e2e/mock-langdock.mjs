@@ -7,6 +7,7 @@ import { build } from "esbuild";
 import { bundleOptions } from "../../scripts/bundle-options.mjs";
 
 const editorId = "writer";
+const teamId = "team";
 const viewerId = "viewer";
 
 async function buffer(stream) {
@@ -56,7 +57,7 @@ export async function prepareMockLangdock() {
           offline = false;
           partial = false;
         }
-        for (const file of command.seed ?? []) files.set(file.id, file);
+        for (const file of command.seed ?? []) files.set(file.id, { folderId: editorId, ...file });
         for (const [id, status] of Object.entries(command.statuses ?? {})) files.get(id).syncStatus = status;
         folderNames = command.folderNames ?? folderNames;
         nextStatus = command.nextStatus ?? nextStatus;
@@ -72,19 +73,25 @@ export async function prepareMockLangdock() {
       if (pathname === "/knowledge" && method === "GET") {
         if (searchParams.has("cursor")) {
           if (searchParams.get("cursor") !== viewerId) return error(400);
-          return success({ folders: [{ id: editorId, name: folderNames.writer, role: "EDITOR", fileCount: files.size }] });
+          return success({ folders: [[editorId, folderNames.writer], [teamId, "Team-Wissensdatenbank"]].map(([id, name]) => ({
+            id, name, role: "EDITOR", fileCount: [...files.values()].filter(({ folderId }) => folderId === id).length,
+          })) });
         }
         return success({
           folders: [{ id: viewerId, name: folderNames.viewer, role: "USER", fileCount: 0 }],
           nextCursor: viewerId,
         });
       }
-      if (pathname === "/knowledge/writer/list" && method === "GET") {
+      const route = /^\/knowledge\/(writer|team)(?:\/([\w-]+))?$/u.exec(pathname);
+      if (!route) return error(404);
+      const [, folderId, id] = route;
+      if (id === "list" && method === "GET") {
         await inventoryGate?.promise;
-        const inventory = [...files.values()].map(({ id, name, syncStatus, createdAt }) => ({ id, name, syncStatus, createdAt }));
-        return success(partial ? inventory.slice(0, -1) : inventory);
+        const inventory = [...files.values()].filter((file) => file.folderId === folderId)
+          .map(({ id, name, syncStatus, createdAt }) => ({ id, name, syncStatus, createdAt }));
+        return success(partial === true || partial === folderId ? inventory.slice(0, -1) : inventory);
       }
-      if (pathname === "/knowledge/writer" && method === "POST") {
+      if (!id && method === "POST") {
         const contentType = request.headers["content-type"];
         const form = await new Response(await buffer(request), { headers: { "Content-Type": contentType } }).formData();
         const file = form.get("file");
@@ -94,15 +101,14 @@ export async function prepareMockLangdock() {
         const id = `upload-${++sequence}`;
         const { name } = file;
         entry.id = id;
-        files.set(id, { id, name, syncStatus: nextStatus, createdAt: new Date().toISOString(),
+        files.set(id, { id, name, folderId, syncStatus: nextStatus, createdAt: new Date().toISOString(),
           bytes: Buffer.from(await file.arrayBuffer()).toString("base64"),
         });
         nextStatus = "SYNCED";
         return success({ id, name });
       }
 
-      const id = /^\/knowledge\/writer\/([\w-]+)$/u.exec(pathname)?.[1];
-      if (!id || !files.has(id)) return error(404);
+      if (!id || files.get(id)?.folderId !== folderId) return error(404);
       entry.id = id;
       if (method === "GET") {
         const { name, syncStatus } = files.get(id);

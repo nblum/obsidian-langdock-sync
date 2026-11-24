@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readData } from "../src/config.ts";
+import { findFolderMapping, readData } from "../src/config.ts";
 import { classification, inspectNote, IncompleteInventory, inventory, managedName } from "../src/notes.ts";
-import { applyPlan, planSync, StaleRun } from "../src/sync.ts";
+import { applyPlan, applyTargetPlans, planSync, StaleRun } from "../src/sync.ts";
 
 const bytes = (text) => new TextEncoder().encode(text).buffer;
 const note = (fields) => bytes(`---\n${fields}\n---\nMarkdown\n`);
@@ -75,11 +75,70 @@ test("rechecks the exact upload bytes if the note changed after building the pla
 
 test("defaults to public and requires a local folder before enabling automatic sync", () => {
   const defaults = readData({ folderId: "writer", automatic: true }).settings;
-  assert.deepEqual(defaults.folders, []);
+  assert.deepEqual(defaults.folderMappings, []);
   assert.equal(defaults.automatic, false);
   assert.equal(defaults.attachmentExtensions, "");
   assert.deepEqual(defaults.propertyFilters, [{ property: "classification", value: "public" }]);
   assert.deepEqual(readData({ folders: ["/"], propertyFilters: [] }).settings.propertyFilters, []);
+});
+
+test("migrates the previous target for all selected folders, without expanding their scope", () => {
+  const { settings } = readData({ folderId: "writer", folders: ["Docs", "Docs/Sub", ".hidden", "Docs"], automatic: true });
+  assert.deepEqual(settings.folderMappings, [
+    { path: "Docs", folderId: "writer" },
+    { path: "Docs/Sub", folderId: "writer" },
+  ]);
+  assert.equal(settings.automatic, true);
+  assert.equal(findFolderMapping("Root.md", settings.folderMappings), undefined);
+  assert.deepEqual(readData({ folderMappings: [], folderId: "writer", folders: ["/"] }).settings.folderMappings, []);
+});
+
+test("routes files to the nearest configured ancestor regardless of mapping order", () => {
+  const mappings = [
+    { path: "A/Child", folderId: "child" },
+    { path: "/", folderId: "root" },
+    { path: "A", folderId: "parent" },
+    { path: "A/Child/Draft", folderId: "" },
+  ];
+  for (const [path, target] of [
+    ["A/Child/Deeper/Note.md", "child"],
+    ["A/Childish/Note.md", "parent"],
+    ["A/Child/Draft/Note.md", ""],
+    ["A.md", "root"],
+    ["AB/Note.pdf", "root"],
+  ]) {
+    assert.equal(findFolderMapping(path, mappings)?.folderId, target);
+  }
+  assert.equal(readData({ folderMappings: mappings, automatic: true }).settings.automatic, false);
+});
+
+test("keeps the managed copy in the old target until the destination is indexed", async () => {
+  const data = note("classification: public");
+  const file = await inspectNote("Docs/Note.md", data);
+  const local = new Map([[file.pathHash, file]]);
+  const oldCopy = { ...file, id: "old", name: file.uploadName, status: "SYNCED" };
+  const storage = { readBinary: async () => data };
+  let status = "EXTRACTION_FAILED";
+  const actions = [];
+  const client = {
+    upload: async (target) => { actions.push(["upload", target]); return "new"; },
+    status: async (target) => { actions.push(["index", target]); return status; },
+    delete: async (target, id) => { actions.push(["delete", target, id]); },
+  };
+  const plans = (destination) => [
+    { target: { id: "old-target", name: "Old target" }, plan: planSync(new Map(), [oldCopy], local) },
+    { target: { id: "new-target", name: "New target" }, plan: planSync(local, destination, local) },
+  ];
+
+  const failed = await applyTargetPlans(plans([]), storage, client, fullVault, true, () => {});
+  assert.equal(failed.issues[0]?.path, file.path);
+  assert.deepEqual(actions, [["upload", "new-target"], ["index", "new-target"]]);
+
+  status = "SYNCED";
+  const complete = await applyTargetPlans(plans([{ ...oldCopy, id: "new", status: "EMBEDDING" }]),
+    storage, client, fullVault, true, () => {});
+  assert.deepEqual(complete.issues, []);
+  assert.deepEqual(actions.slice(2), [["index", "new-target"], ["delete", "old-target", "old"]]);
 });
 
 test("property filters allow alternatives within a property and require all selected properties", () => {

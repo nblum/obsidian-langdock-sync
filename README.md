@@ -6,7 +6,7 @@
 [![Star on GitHub](https://img.shields.io/github/stars/nblum/obsidian-langdock-sync?logo=github&label=star)](https://github.com/nblum/obsidian-langdock-sync)
 [![Buy me a coffee](https://img.shields.io/badge/Buy_me_a_coffee-Ko--fi-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/blumnico)
 
-Send selected Markdown notes and attachments from Obsidian to a Langdock knowledge base. Choose which files to include, preview what will change, and sync manually or automatically.
+Send selected Markdown notes and attachments from Obsidian to Langdock knowledge bases. Assign a knowledge base to each folder, preview what will change, and sync manually or automatically.
 
 Requires **Obsidian 1.12.4 or later** on desktop or mobile.
 
@@ -16,7 +16,7 @@ Requires **Obsidian 1.12.4 or later** on desktop or mobile.
 
 ## Network use
 
-Langdock Sync requires a Langdock workspace and sends HTTPS requests to the Langdock Knowledge Folder API at `api.langdock.com`. It uses your workspace API key to list accessible knowledge bases, compare local files with copies in the selected knowledge base, and check indexing status. Sync uploads eligible files in full, including the YAML properties of Markdown notes, and removes managed copies when needed.
+Langdock Sync requires a Langdock workspace and sends HTTPS requests to the Langdock Knowledge Folder API at `api.langdock.com`. It uses your workspace API key to list accessible knowledge bases, compare local files with copies in their assigned knowledge bases, and check indexing status. Sync uploads eligible files in full, including the YAML properties of Markdown notes, and removes managed copies when needed.
 
 Opening an eligible file checks its sync status with Langdock when **Show sync button in files** is enabled. This option is on by default.
 
@@ -29,15 +29,27 @@ Opening an eligible file checks its sync status with Langdock when **Show sync b
 
 ### Connect to Langdock
 
-1. Ask your Langdock workspace admin to create a workspace API key with the **Knowledge Folder API** permission (`KNOWLEDGE_FOLDER_API`). In the knowledge base’s **Share** dialog, the admin grants the key the **Editor** role. [Langdock setup guide](https://docs.langdock.com/en/developer/knowledge-folder-api/sharing)
+1. Ask your Langdock workspace admin to create a workspace API key with the **Knowledge Folder API** permission (`KNOWLEDGE_FOLDER_API`).
 2. In Obsidian, open **Settings → Langdock Sync**, paste the key, and select **Save key**.
-3. Choose your **Knowledge base**, then select **Test connection**. Use **Load knowledge bases** to refresh the list if needed.
+3. [Share each knowledge base with that key](#share-a-new-knowledge-base). **Test connection** checks access to the bases assigned under **Manage folders**.
 
-![Langdock connection settings with Product handbook selected and a Connection successful message](assets/screenshots/connection.webp)
+![Langdock connection settings with the sharing instructions next to Load knowledge bases](assets/screenshots/connection.webp)
+
+### Share a new knowledge base
+
+Langdock lists the knowledge bases available to the workspace API key saved in Obsidian. Give that key **Editor** access to each new knowledge base you want to use for sync.
+
+1. Open the new knowledge base in **Langdock → Library** and select **Share**.
+2. Ask a workspace admin to find the existing key by name under **Add people, groups and API keys**, select **Editor**, and confirm with **Share**. [Langdock sharing guide](https://docs.langdock.com/en/developer/knowledge-folder-api/sharing)
+3. In **Obsidian → Settings → Langdock Sync**, select **Load knowledge bases** again. You can then select the new base under **Manage folders**.
 
 ### Choose notes to sync
 
-Under **Manage folders**, select **Add folder** and choose a vault folder, such as `Knowledge`. Subfolders are included. Choose **Entire vault (/)** to apply your filters across the vault.
+Under **Manage folders**, select **Add folder**, choose a vault folder, and select its knowledge base. **Entire vault (/)** provides a default for all other folders. The nearest configured ancestor determines the target for each file. For example, with `/` assigned to Product handbook and `Knowledge/Support` assigned to Support archive, `Knowledge/Support/FAQ.md` syncs to Support archive. `Knowledge/Release notes.md` syncs to Product handbook. Without a root assignment, only the configured folder trees are in scope.
+
+Existing folder selections keep their previous knowledge base when you upgrade. Editing the assignments turns off **Sync automatically** until you enable it again. Assign a knowledge base to every added folder to run a full sync, including periodic sync.
+
+The settings remember the names of assigned knowledge bases so you can see them offline. Select **Load knowledge bases** to refresh names after a rename.
 
 The default filter includes notes with the property `classification: public`. To try it, create `Knowledge/Launch notes.md` and paste this example in Obsidian’s **Source mode**. If the note already has Properties, add the fields to that section.
 
@@ -54,7 +66,7 @@ The new help center is available to all customers.
 
 The two valid classifications are `public` and `internal`. Each synced note needs a single classification, even if you remove all property filters.
 
-![Manage folders and Manage properties with the Knowledge folder and the default public classification filter](assets/screenshots/filters.webp)
+![Manage folders with the Knowledge folder assigned to Product handbook, followed by the default public classification filter](assets/screenshots/filters.webp)
 
 ### Include attachments
 
@@ -75,10 +87,10 @@ The attachment must be in a selected folder and match the configured filters. Ot
 
 ### Preview and run your first sync
 
-1. In **Settings → Langdock Sync**, select **Preview** to review planned uploads, updates, and deletions in Langdock.
-2. Close the preview, select **Sync now**, and check **Last successful sync** in the settings. The example note will appear in your selected Langdock knowledge base.
+1. In **Settings → Langdock Sync**, select **Preview** to review planned uploads, updates, and deletions by knowledge base.
+2. Close the preview, select **Sync now**, and check **Last successful sync** in the settings. The example note will appear in the knowledge base assigned to its folder.
 3. To keep it up to date, turn on **Sync automatically**. This starts off disabled. Once enabled, it runs when you open the vault and after changes in it.
-4. To sync periodically while the vault is open, choose a **Sync interval** of 15 minutes, 30 minutes, 1 hour, or 2 hours. It starts off disabled and requires **Sync automatically**.
+4. To sync periodically while the vault is open, choose a **Sync interval** of 15 minutes, 30 minutes, 1 hour, or 2 hours. It starts off disabled and works independently of **Sync automatically**.
 
 ![Sync settings showing the Preview and Sync now buttons and the time of the last successful sync](assets/screenshots/sync-status.webp)
 
@@ -90,12 +102,16 @@ Eligible files show a sync button in their header when opened in an Obsidian fil
 
 - **Filter by more properties.** Under **Manage properties**, add `classification = internal` and `audience = team` alongside the default `classification = public` to include both public and internal notes for the team. Values for the same property are alternatives. Each different property must match. A list property matches when any item has an allowed value.
 - **Exclude a file.** For a note, set `langdock_sync: false` in its Properties. For an attachment, remove its entry from `attachment-classifications` or give it a classification outside the sync selection. The next sync removes the managed copy from Langdock. Deleting a local file or changing the folder, extensions, or filters so it no longer qualifies also removes its managed copy. Files you uploaded separately remain in Langdock.
-- **Use one source vault per knowledge base.** The plugin removes managed copies that fall outside the current vault’s sync selection.
+- **Use one source vault per knowledge base.** A full sync reconciles all currently assigned knowledge bases. If you reassign a folder and both bases are still assigned, the full sync removes old copies once their replacements are indexed. A base with no folder assignment is outside the sync scope.
 
 ## Troubleshooting
 
-- **The knowledge base is missing or read-only.** Ask your workspace admin to check the key’s **Editor** access to that knowledge base. Then select **Load knowledge bases** again. [Langdock sharing guide](https://docs.langdock.com/en/developer/knowledge-folder-api/sharing)
+- **The knowledge base is missing or read-only.** Check the **Editor** grant for the exact workspace API key saved in Obsidian, then reload the list. [Share a new knowledge base](#share-a-new-knowledge-base)
 - **A note is missing from the preview.** Check its folder, classification, and any extra filters. The preview lists changes, so an unchanged note that's already in Langdock may be absent.
 - **Langdock reports an indexing error.** Check the message in **Settings → Langdock Sync** and select **Sync now** to retry.
 
-[Report an issue](https://github.com/nblum/obsidian-langdock-sync/issues) · [Release notes](CHANGELOG.md) · [Local build and contributor guide](CONTRIBUTING.md#development)
+## Build locally
+
+Use the Node.js version in `.nvmrc`, then run `npm ci` and `npm run build` to generate `main.js`.
+
+[Report an issue](https://github.com/nblum/obsidian-langdock-sync/issues) · [Release notes](CHANGELOG.md) · [Contributor guide](CONTRIBUTING.md#development)

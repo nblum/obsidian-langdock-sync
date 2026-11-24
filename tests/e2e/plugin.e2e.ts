@@ -5,6 +5,9 @@ import type { RequestEntry } from "./mock-client.ts";
 import { closeSettings, openSettings, waitFor } from "./obsidian-settings.ts";
 
 const pluginId = "langdock-sync";
+const folderPicker = 'select[aria-label="Ordner zur Synchronisierung"]:not([aria-hidden="true"])';
+const targetPicker = (path: string) => `select[aria-label="Wissensdatenbank für ${path}"]:not([aria-hidden="true"])`;
+const rootTarget = "Gesamter Vault (/)";
 const approved = (label: string, body: string): string => `---\nclassification: ${label}\n---\n${body}\n`;
 
 function mutations(requests: readonly RequestEntry[]): RequestEntry[] {
@@ -43,7 +46,8 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await control({ reset: true });
     await browser.reloadObsidian({ vault: "tests/e2e/vault", plugins: [] });
     await obsidianPage.write(".obsidian/plugins/langdock-sync/data.json", JSON.stringify({
-      folderId: "writer", folders: ["/"], propertyFilters: [], language: "de", introductionSeen: true,
+      folderMappings: [{ path: "/", folderId: "writer" }], propertyFilters: [], language: "de", introductionSeen: true,
+      targetNames: { writer: "Test-Wissensdatenbank" },
     }));
     await browser.executeObsidian(({ app }) => {
       app.secretStorage.setSecret("langdock-api", "simulated-key");
@@ -54,7 +58,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
   it("shows the next setup step while preview and manual sync are disabled", async () => {
     await browser.executeObsidian(async ({ app, plugins }) => {
       app.secretStorage.setSecret("langdock-api", "");
-      await plugins.langdockSync.updateSettings({ folders: [] });
+      await plugins.langdockSync.updateSettings({ folderMappings: [] });
     });
 
     const mainWindow = await openSettings();
@@ -67,19 +71,56 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
 
     await $('input[aria-label="Langdock-API-Key"]').setValue("simulated-key");
     await $("button=Key speichern").click();
-    await expect(reason).toHaveText("Wähle eine Langdock-Wissensdatenbank mit Schreibrecht.");
-    const target = 'select[aria-label="Wissensdatenbank"]:not([aria-hidden="true"])';
-    await expect($(`${target} option[value="writer"]`)).toExist();
-    await $(target).selectByAttribute("value", "writer");
     await expect(reason).toHaveText("Wähle mindestens einen Ordner für den Abgleich.");
     await expect(preview()).toBeDisabled();
     await expect(sync()).toBeDisabled();
 
-    await $('select[aria-label="Ordner zur Synchronisierung"]:not([aria-hidden="true"])').selectByAttribute("value", "/");
+    await $(folderPicker).selectByAttribute("value", "/");
+    await expect(reason).toHaveText("Wähle für jeden Ordner eine Langdock-Wissensdatenbank mit Schreibrecht.");
+    await expect(preview()).toBeDisabled();
+    const target = targetPicker(rootTarget);
+    await expect($(`${target} option[value="writer"]`)).toExist();
+    await $(target).selectByAttribute("value", "writer");
     await expect(reason).toHaveText("");
     await expect(preview()).toBeEnabled();
     await expect(sync()).toBeEnabled();
     await closeSettings(mainWindow);
+  });
+
+  it("loads missing target names once and displays saved names offline after restarting", async () => {
+    await browser.executeObsidian(async ({ plugins }) => {
+      await plugins.langdockSync.saveData({
+        folderMappings: [{ path: "/", folderId: "writer" }], language: "de", introductionSeen: true,
+      });
+    });
+    await obsidianPage.disablePlugin(pluginId);
+    await obsidianPage.enablePlugin(pluginId);
+
+    const option = () => $(`${targetPicker(rootTarget)} option[value="writer"]`);
+    const readSavedNames = () => browser.executeObsidian(async ({ plugins }) => {
+      const data = await plugins.langdockSync.loadData() as { targetNames?: Record<string, string> } | null;
+      return data?.targetNames;
+    });
+    const original = "Test-Wissensdatenbank";
+    let mainWindow = await openSettings();
+    await expect(option()).toHaveText(original);
+    await closeSettings(mainWindow);
+    await waitFor(async () => (await readSavedNames())?.writer === original, "The target name was not saved");
+    expect(await readSavedNames()).toEqual({ writer: original });
+
+    await control({ reset: true, offline: true });
+    await obsidianPage.disablePlugin(pluginId);
+    await obsidianPage.enablePlugin(pluginId);
+    mainWindow = await openSettings();
+    await expect(option()).toHaveText(original);
+    expect((await state()).requests).toHaveLength(0);
+
+    const renamed = "Umbenannte Wissensdatenbank";
+    await control({ offline: false, folderNames: { writer: renamed, viewer: "Nur Ansicht" } });
+    await $("button=Wissensdatenbanken laden").click();
+    await expect(option()).toHaveText(renamed);
+    await closeSettings(mainWindow);
+    await waitFor(async () => (await readSavedNames())?.writer === renamed, "The renamed target name was not saved");
   });
 
   it("opens a single preview immediately and replaces progress with the plan or error", async () => {
@@ -121,6 +162,84 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await browser.keys("Escape");
   });
 
+  it("routes inherited and overridden folders across knowledge bases for preview, file sync, and full sync", async () => {
+    const note = approved("public", "Eligible for its assigned target");
+    const inherited = "Knowledge/Guides/Faq.md";
+    const byTarget = {
+      writer: ["Root.md", "Knowledge/Internal/Spec.md", "Knowledgeable/Similar.md"],
+      team: [inherited, "Knowledge/Guide.md"],
+    };
+    for (const path of Object.values(byTarget).flat()) await obsidianPage.write(path, note);
+    await control({ seed: [
+      legacy("old-target", inherited, note),
+      { id: "manual-team", name: "Manual.md", folderId: "team", syncStatus: "SYNCED" },
+    ] });
+
+    const mainWindow = await openSettings();
+    const loadTargets = () => $("button=Wissensdatenbanken laden");
+    const sharingHelp = () => loadTargets().$("..").$("..").$(".setting-item-description");
+    await expect(sharingHelp()).toHaveText(expect.stringContaining("Workspace-API-Key Zugriff hat"));
+    await expect(sharingHelp()).toHaveText(expect.stringContaining("die Rolle „Editor“"));
+    const guide = () => sharingHelp().$('a[href="https://docs.langdock.com/en/developer/knowledge-folder-api/sharing"]');
+    await expect(guide()).toHaveText("Freigabe in Langdock");
+    await loadTargets().click();
+    await $(folderPicker).selectByAttribute("value", "Knowledge");
+    const knowledgeTarget = targetPicker("Knowledge");
+    await expect($("button=Vorschau")).toBeDisabled();
+    await expect($(`${knowledgeTarget} option[value="team"]`)).toExist();
+    await expect(guide()).toBeDisplayed();
+    await $(knowledgeTarget).selectByAttribute("value", "team");
+    await $(folderPicker).selectByAttribute("value", "Knowledge/Internal");
+    const internalTarget = targetPicker("Knowledge/Internal");
+    await $(internalTarget).selectByAttribute("value", "writer");
+    await expect($(internalTarget)).toHaveValue("writer");
+    await $("button=Verbindung testen").click();
+    await expect($(".langdock-sync-message--success[role='status']")).toHaveText("Verbindung erfolgreich.");
+    await closeSettings(mainWindow);
+
+    await browser.executeObsidianCommand("langdock-sync:preview-sync");
+    const preview = $(".langdock-sync-preview");
+    const writerChanges = preview.$("h3=Test-Wissensdatenbank").$("./following-sibling::ul[1]");
+    const teamChanges = preview.$("h3=Team-Wissensdatenbank").$("./following-sibling::ul[1]");
+    await expect(writerChanges).toHaveText(expect.stringContaining("Hochladen · Knowledge/Internal/Spec.md"));
+    await expect(writerChanges).toHaveText(expect.stringContaining(`Löschen · ${inherited}`));
+    await expect(teamChanges).toHaveText(expect.stringContaining(`Hochladen · ${inherited}`));
+    await browser.keys("Escape");
+
+    await browser.executeObsidian(async ({ app }, path) => {
+      const file = app.vault.getFileByPath(path);
+      if (!file) throw new Error("The test note is missing");
+      await app.workspace.getLeaf(false).openFile(file);
+    }, inherited);
+    const button = $(".view-action.langdock-sync-note-action");
+    await expect(button).toHaveAttribute("data-state", "unsynced");
+    await button.click();
+    const modal = $(".langdock-sync-note-dialog");
+    const syncFile = modal.$("button=Jetzt synchronisieren");
+    await expect(syncFile).toBeEnabled();
+    await syncFile.click();
+    await expect(modal.$(".langdock-sync-note-status")).toHaveAttribute("data-state", "synced");
+    expect(mutations((await state()).requests).map(({ method, path }) => [method, path])).toEqual([
+      ["POST", "/knowledge/team"],
+    ]);
+    await browser.keys("Escape");
+
+    await control({ partial: "team" });
+    expect((await syncNow()).issue).toContain("unvollständig");
+    expect(mutations((await state()).requests)).toHaveLength(1);
+    await control({ partial: false });
+
+    expect((await syncNow()).issue).toBeNull();
+    const result = await state();
+    for (const [target, paths] of Object.entries(byTarget)) {
+      const actual = result.files.filter(({ folderId, id }) => folderId === target && id !== "manual-team");
+      expect(actual.map(({ name }) => name).sort()).toEqual(paths.map((path) => legacy("expected", path, note).name).sort());
+    }
+    expect(result.files.some(({ id }) => id === "manual-team")).toBe(true);
+    expect(mutations(result.requests).filter(({ method }) => method === "DELETE").map(({ path }) => path))
+      .toEqual(["/knowledge/writer/old-target"]);
+  });
+
   it("previews, checks role and connection, uploads eligible local bytes and adopts a Python upload", async () => {
     const publicPath = "Öffentliche Notiz.md";
     const publicNote = "\uFEFF---\r\nclassification: public\r\n---\r\nGrüße\r\n";
@@ -159,7 +278,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await expect(key()).toHaveValue("");
     await key().setValue("simulated-key");
     await $("button=Key speichern").click();
-    const selector = 'select[aria-label="Wissensdatenbank"]:not([aria-hidden="true"])';
+    const selector = targetPicker(rootTarget);
     await expect($(`${selector} option[value="viewer"]`)).toHaveAttribute("disabled");
     await expect($(selector)).toHaveValue("");
     await expect(key()).toHaveValue("");
@@ -197,7 +316,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     expect((await syncNow()).issue).toBeNull();
     expect(mutations((await state()).requests)).toHaveLength(2);
     const data = await browser.executeObsidian(async ({ plugins }) => await plugins.langdockSync.loadData() as unknown);
-    expect(data).toMatchObject({ folderId: "writer", automatic: false });
+    expect(data).toMatchObject({ folderMappings: [{ path: "/", folderId: "writer" }], automatic: false });
     expect(data).not.toHaveProperty("secretId");
     expect(await browser.executeObsidian(({ app }) => app.secretStorage.getSecret("langdock-api") === "simulated-key")).toBe(true);
     expect(JSON.stringify(data)).not.toContain("simulated-key");
@@ -211,7 +330,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await browser.executeObsidian(async ({ app, plugins }) => {
       app.secretStorage.setSecret("langdock-api", "");
       app.secretStorage.setSecret("previous", "simulated-key");
-      await plugins.langdockSync.saveData({ secretId: "previous", folderId: "writer", introductionSeen: true });
+      await plugins.langdockSync.saveData({ secretId: "previous", folderId: "writer", folders: ["/"], introductionSeen: true });
     });
     await obsidianPage.disablePlugin(pluginId);
     await obsidianPage.enablePlugin(pluginId);
@@ -223,12 +342,12 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     }));
     expect(migrated.kept).toBe(true);
     expect(migrated.copied).toBe(true);
-    expect(migrated.data).toMatchObject({ folderId: "writer", automatic: false });
+    expect(migrated.data).toMatchObject({ folderMappings: [{ path: "/", folderId: "writer" }], automatic: false });
     expect(migrated.data).not.toHaveProperty("secretId");
 
     await browser.executeObsidian(async ({ app, plugins }) => {
       app.secretStorage.setSecret("previous", "different-key");
-      await plugins.langdockSync.saveData({ secretId: "previous", folderId: "writer", automatic: true, introductionSeen: true });
+      await plugins.langdockSync.saveData({ secretId: "previous", folderId: "writer", folders: ["/"], automatic: true, introductionSeen: true });
     });
     await obsidianPage.disablePlugin(pluginId);
     await obsidianPage.enablePlugin(pluginId);
@@ -236,7 +355,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       config: plugins.langdockSync.config,
       kept: app.secretStorage.getSecret("langdock-api") === "simulated-key",
     }));
-    expect(conflict).toMatchObject({ config: { folderId: "", automatic: false }, kept: true });
+    expect(conflict).toMatchObject({ config: { folderMappings: [{ path: "/", folderId: "" }], automatic: false }, kept: true });
     expect((await state()).requests).toHaveLength(0);
   });
 
@@ -274,9 +393,12 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       .toHaveText("Gleiche Eigenschaft: ODER. Unterschiedliche Eigenschaften: UND.");
     await expect($(".setting-item-name=classification = public")).toExist();
     await expect($('.langdock-sync-help a[href="https://github.com/nblum/obsidian-classificator"]')).toExist();
-    const folders = $('select[aria-label="Ordner zur Synchronisierung"]:not([aria-hidden="true"])');
-    await folders.selectByAttribute("value", "Share");
-    await expect($(".setting-item-name=Share")).toExist();
+    await $("button=Wissensdatenbanken laden").click();
+    await $(folderPicker).selectByAttribute("value", "Share");
+    const target = targetPicker("Share");
+    await expect($(`${target} option[value="writer"]`)).toExist();
+    await $(target).selectByAttribute("value", "writer");
+    await expect($(target)).toHaveValue("writer");
     await closeSettings(mainWindow);
     expect((await syncNow()).issue).toBeNull();
     expect((await state()).files.map(({ name }) => name)).toEqual([legacy("expected", publicPath, publicNote).name]);
@@ -296,7 +418,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
 
   it("switches languages without losing the current sync error and follows the Obsidian language in Auto", async () => {
     await browser.executeObsidian(async ({ plugins }) => {
-      await plugins.langdockSync.updateSettings({ folders: [] });
+      await plugins.langdockSync.updateSettings({ folderMappings: [] });
     });
     expect((await syncNow()).issue).toContain("mindestens einen Ordner");
 
@@ -330,7 +452,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await closeSettings(mainWindow);
 
     await browser.executeObsidian(async ({ plugins }) => {
-      await plugins.langdockSync.updateSettings({ folders: ["/"] });
+      await plugins.langdockSync.updateSettings({ folderMappings: [{ path: "/", folderId: "writer" }] });
     });
     await browser.executeObsidianCommand("langdock-sync:preview-sync");
     await expect($(".modal-title")).toHaveText("Langdock Sync · Aperçu");
@@ -369,7 +491,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       await app.vault.create("Knowledge/Excluded.md", "---\nclassification: public\nlangdock_sync: false\n---\nExcluded");
       await app.vault.create("Outside.md", other);
       const file = await app.vault.create(path, original);
-      await plugins.langdockSync.updateSettings({ folders: ["Knowledge"] });
+      await plugins.langdockSync.updateSettings({ folderMappings: [{ path: "Knowledge", folderId: "writer" }] });
       await app.workspace.getLeaf(false).openFile(file);
     }, path, original, other);
 
@@ -494,7 +616,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       await app.vault.createBinary("Knowledge/Unlisted.pdf", new TextEncoder().encode(pdf).buffer);
       await app.vault.create("Knowledge/Source.txt", "An approved attachment of an unchecked format.");
       await plugins.langdockSync.updateSettings({
-        folders: ["Knowledge"], propertyFilters: [{ property: "classification", value: "public" }],
+        folderMappings: [{ path: "Knowledge", folderId: "writer" }], propertyFilters: [{ property: "classification", value: "public" }],
         attachmentExtensions: "txt",
       });
       await app.workspace.getLeaf(false).openFile(file);
@@ -626,7 +748,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     expect(topControls).toEqual({
       headerFirst: true,
       title: "Langdock Sync",
-      description: "Synchronisiert freigegebene Markdown-Notizen und Anhänge aus Obsidian mit einer Langdock-Wissensdatenbank.",
+      description: "Synchronisiert freigegebene Markdown-Notizen und Anhänge aus Obsidian mit Langdock-Wissensdatenbanken.",
       buttons: ["Einführung anzeigen", "Über Langdock Sync"],
       nextHeading: "Langdock Verbindung",
     });
@@ -745,21 +867,18 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     expect(mutations(result.requests).map(({ method }) => method)).toEqual(["POST"]);
   });
 
-  it("saves an optional hourly sync and checks again without vault changes", async () => {
+  it("saves and runs an hourly sync with startup and vault-change sync disabled", async () => {
     const mainWindow = await openSettings();
     const interval = () => $('select[aria-label="Sync-Intervall"]:not([aria-hidden="true"])');
-    await expect(interval()).toBeDisabled();
     await expect(interval()).toHaveValue("0");
-    await $(".setting-item-name=Automatisch synchronisieren").$("../..").$(".checkbox-container").click();
     await expect(interval()).toBeEnabled();
     await interval().selectByAttribute("value", "60");
     await closeSettings(mainWindow);
     await waitFor(async () => {
       const saved = await browser.executeObsidian(async ({ plugins }) => {
-        const data = await plugins.langdockSync.loadData() as { syncIntervalMinutes?: number } | null;
-        return data?.syncIntervalMinutes;
+        return await plugins.langdockSync.loadData() as { automatic?: boolean; syncIntervalMinutes?: number } | null;
       });
-      return saved === 60;
+      return saved?.automatic === false && saved.syncIntervalMinutes === 60;
     }, "The hourly interval was not saved");
 
     await obsidianPage.disablePlugin(pluginId);
@@ -772,12 +891,21 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
       browserWindow.setInterval = (handler, delay, ...args: unknown[]) => {
         if (delay !== 3_600_000) return setInterval(handler, delay, ...args);
         browserWindow.setInterval = setInterval;
-        return setInterval(handler, 3_000, ...args);
+        return setInterval(handler, 5_000, ...args);
       };
     });
     await obsidianPage.enablePlugin(pluginId);
-    await waitFor(async () => await checks() >= before + 2, "The hourly timer did not sync after the startup check");
-    expect(mutations((await state()).requests)).toHaveLength(0);
+    const path = "Interval.md";
+    const note = approved("public", "Uploaded on the next interval");
+    await browser.executeObsidian(async ({ app }, path, note) => {
+      await app.vault.create(path, note);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_500));
+    }, path, note);
+    expect(await checks()).toBe(before);
+    await waitFor(async () => await checks() >= before + 2, "The interval did not repeat without vault changes");
+    const result = await state();
+    expect(mutations(result.requests).map(({ method }) => method)).toEqual(["POST"]);
+    expect(result.files.map(({ name }) => name)).toEqual([legacy("expected", path, note).name]);
   });
 
   it("aborts writes for unreadable local notes or an incomplete remote listing", async () => {

@@ -1,4 +1,5 @@
 import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
+import { isLangdockId } from "./config.ts";
 import { uploadFormat } from "./file-formats.ts";
 import { LocalizedError } from "./i18n.ts";
 import type { ErrorKey, Issue } from "./i18n.ts";
@@ -39,10 +40,6 @@ export function isFailed(status: unknown): status is typeof failedStatuses[numbe
 
 function isStatus(status: unknown): status is IndexStatus {
   return status === "SYNCED" || pendingStatuses.some((value) => value === status) || isFailed(status);
-}
-
-export function isId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && !/[^a-zA-Z0-9_-]/u.test(value);
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -109,7 +106,7 @@ export class Langdock {
       if (!Array.isArray(result?.folders)) throw invalidResponse();
       for (const item of result.folders as unknown[]) {
         const folder = record(item);
-        if (!folder || !isId(folder.id) || typeof folder.name !== "string"
+        if (!folder || !isLangdockId(folder.id) || typeof folder.name !== "string"
           || (folder.role !== "EDITOR" && folder.role !== "USER")
           || typeof folder.fileCount !== "number" || !Number.isSafeInteger(folder.fileCount) || folder.fileCount < 0
           || folders.has(folder.id)) {
@@ -119,7 +116,7 @@ export class Langdock {
       }
       const cursor = result.nextCursor;
       if (cursor === undefined || cursor === null || cursor === "") return [...folders.values()];
-      if (!isId(cursor) || cursors.has(cursor)) throw invalidResponse();
+      if (!isLangdockId(cursor) || cursors.has(cursor)) throw invalidResponse();
       cursors.add(cursor);
       query = `?limit=100&cursor=${encodeURIComponent(cursor)}`;
     }
@@ -139,7 +136,7 @@ export class Langdock {
     const ids = new Set<string>();
     for (const item of result as unknown[]) {
       const entry = record(item);
-      if (!entry || !isId(entry.id) || typeof entry.name !== "string" || ids.has(entry.id)) throw invalidResponse();
+      if (!entry || !isLangdockId(entry.id) || typeof entry.name !== "string" || ids.has(entry.id)) throw invalidResponse();
       ids.add(entry.id);
       const names = managedName(entry.name);
       if (!names) continue;
@@ -165,7 +162,7 @@ export class Langdock {
     const payload = await body.arrayBuffer();
     assertCurrent();
     const result = record(await this.request("POST", `/${folderId}`, { body: payload, contentType }));
-    if (!result || !isId(result.id) || result.name !== name) throw invalidResponse();
+    if (!result || !isLangdockId(result.id) || result.name !== name) throw invalidResponse();
     return result.id;
   }
 

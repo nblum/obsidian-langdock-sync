@@ -1,9 +1,9 @@
 {
   "id": "langdock-sync",
   "name": "Langdock Sync",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minAppVersion": "1.12.4",
-  "description": "Sync approved Markdown notes with a Langdock knowledge base.",
+  "description": "Sync selected notes and attachments with Langdock knowledge bases by vault folder.",
   "author": "Nico Blum",
   "isDesktopOnly": false
 }

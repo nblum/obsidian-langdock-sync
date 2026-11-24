@@ -2,10 +2,19 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
 ### Added
 
+- Assign Langdock knowledge bases by vault folder. Subfolders use the nearest assignment, and an assignment for `/` provides the vault-wide default. Existing folder selections keep their previous knowledge base after upgrading. The preview groups changes by knowledge base.
 - Select attachment extensions from a checklist and sync files whose entry in the folder’s `_meta.md` matches the sync filters.
 - Show a sync status button by default in the header of eligible notes and attachments, next to the Classificator badge when present. Open it to see when the indexed copy was uploaded and to sync the file.
+- Explain how to grant the workspace API key Editor access beside **Load knowledge bases** and in the setup guide.
+- Remember the names of assigned knowledge bases so they are visible in settings after a restart and when offline.
+
+### Changed
+
+- Configure periodic sync independently of **Sync automatically**, which controls sync on startup and after vault changes. A previously selected interval now runs even when **Sync automatically** is off.
 
 ## [0.2.0] - 2026-11-23
 
