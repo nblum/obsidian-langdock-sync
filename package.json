@@ -1,6 +1,6 @@
 {
   "name": "obsidian-langdock-sync",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Sync Obsidian notes with Langdock.",
   "license": "MIT",

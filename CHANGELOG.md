@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-25
+
 ### Changed
 
 - Start the introduction with a welcome page and open the Langdock Sync settings when you select **Done**.
