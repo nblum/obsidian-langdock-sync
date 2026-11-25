@@ -38,6 +38,8 @@ The capture suite defaults to Obsidian 1.15.1 with a 1280 × 900 viewport, the l
 
 To add a capture, register its filename and caption in `tests/e2e/screenshot-assets.json` and capture the corresponding UI state in `tests/e2e/documentation.capture.ts`.
 
+The introduction embeds its screenshots in `main.js`. Rebuild the plugin after changing these assets.
+
 ## Teaser artwork
 
 The shared checklist defines the teaser layout and visual identity. Keep the 4:3 vector artwork in `assets/teaser/teaser.svg` with all lettering converted to paths. Export the same artwork as `teaser.png` at 480 × 360, `teaser@2x.png` at 960 × 720, and `teaser@3x.png` at 1440 × 1080. Check the legibility of the 480 × 360 image at actual size.

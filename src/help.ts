@@ -1,5 +1,9 @@
 import { Modal } from "obsidian";
 import type { App, PluginManifest } from "obsidian";
+import connectionImage from "../assets/screenshots/connection.webp";
+import fileStatusImage from "../assets/screenshots/file-status.webp";
+import foldersImage from "../assets/screenshots/manage-folders.webp";
+import syncedNoteImage from "../assets/screenshots/synced-note.webp";
 import type { TranslationKey, Translator } from "./i18n.ts";
 
 const repository = "https://github.com/nblum/obsidian-langdock-sync";
@@ -60,7 +64,11 @@ export class AboutModal extends Modal {
 export class IntroductionModal extends Modal {
   private step = 0;
 
-  constructor(app: App, private readonly translate: Translator) {
+  constructor(
+    app: App,
+    private readonly translate: Translator,
+    private readonly onFinish: () => void,
+  ) {
     super(app);
   }
 
@@ -78,16 +86,28 @@ export class IntroductionModal extends Modal {
     const { contentEl, translate: t } = this;
     const steps = [
       {
+        title: t("intro.welcomeTitle"),
+        description: t("intro.welcomeHelp"),
+        image: syncedNoteImage,
+        imageAlt: t("intro.welcomeImageAlt"),
+      },
+      {
         title: t("intro.connectionTitle"),
         description: t("intro.connectionHelp", { test: t("settings.testConnection") }),
+        image: connectionImage,
+        imageAlt: t("intro.connectionImageAlt"),
       },
       {
         title: t("intro.scopeTitle"),
         description: t("intro.scopeHelp"),
+        image: foldersImage,
+        imageAlt: t("intro.scopeImageAlt"),
       },
       {
         title: t("intro.syncTitle"),
         description: t("intro.syncHelp", { preview: t("settings.preview"), sync: t("commands.syncNow") }),
+        image: fileStatusImage,
+        imageAlt: t("intro.syncImageAlt"),
       },
     ];
     const step = steps[this.step];
@@ -96,6 +116,10 @@ export class IntroductionModal extends Modal {
     contentEl.empty();
     const heading = contentEl.createEl("h3", { text: step.title, attr: { tabindex: "-1" } });
     contentEl.createEl("p", { text: step.description });
+    contentEl.createEl("img", {
+      cls: "langdock-sync-introduction-image",
+      attr: { src: step.image, alt: step.imageAlt },
+    });
     const actions = contentEl.createDiv({ cls: "langdock-sync-dialog-actions" });
     actions.createSpan({
       cls: "langdock-sync-introduction-progress",
@@ -113,6 +137,7 @@ export class IntroductionModal extends Modal {
       .addEventListener("click", () => {
         if (last) {
           this.close();
+          this.onFinish();
         } else {
           this.step++;
           this.renderStep(true);

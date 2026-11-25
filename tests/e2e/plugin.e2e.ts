@@ -2,7 +2,7 @@ import { $, $$, browser, expect } from "@wdio/globals";
 import { obsidianPage } from "wdio-obsidian-service";
 import { control, legacy, state } from "./mock-client.ts";
 import type { RequestEntry } from "./mock-client.ts";
-import { closeSettings, openSettings, waitFor } from "./obsidian-settings.ts";
+import { closeSettings, openSettings, waitFor, waitForSettings } from "./obsidian-settings.ts";
 
 const pluginId = "langdock-sync";
 const folderPicker = 'select[aria-label="Ordner zur Synchronisierung"]:not([aria-hidden="true"])';
@@ -697,27 +697,47 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     const intro = () => $(".langdock-sync-introduction");
     const continueButton = () => intro().$("button.mod-cta");
     const progress = () => intro().$(".langdock-sync-introduction-progress");
+    const expectImage = async (alt: string) => {
+      const illustration = intro().$("img.langdock-sync-introduction-image");
+      await expect(illustration).toBeDisplayed();
+      await expect(illustration).toHaveAttribute("alt", alt);
+      await waitFor(async () => Number(await illustration.getProperty("naturalWidth")) > 0,
+        "The introduction screenshot did not load");
+    };
+    const mainWindow = await browser.getWindowHandle();
     await expect(intro().$(".modal-title")).toHaveText("Einführung in Langdock Sync");
+    await expect(intro().$("h3")).toHaveText("Willkommen bei Langdock Sync");
+    await expect(progress()).toHaveText("Schritt 1 von 4");
+    await expectImage("Ein Obsidian-Notizkopf mit dem Status „Synchronisiert“.");
+    await continueButton().click();
     await expect(intro().$("h3")).toHaveText("Langdock verbinden");
-    await expect(progress()).toHaveText("Schritt 1 von 3");
+    await expect(progress()).toHaveText("Schritt 2 von 4");
+    await expectImage("Die Langdock-Verbindung mit den Schaltflächen zum Speichern des API-Keys und zum Verbindungstest.");
+    await intro().$("button=Zurück").click();
+    await expect(intro().$("h3")).toHaveText("Willkommen bei Langdock Sync");
+    await expect(progress()).toHaveText("Schritt 1 von 4");
+    await continueButton().click();
     await continueButton().click();
     await expect(intro().$("h3")).toHaveText("Notizen auswählen");
-    await expect(progress()).toHaveText("Schritt 2 von 3");
-    await intro().$("button=Zurück").click();
-    await expect(progress()).toHaveText("Schritt 1 von 3");
-    await continueButton().click();
+    await expect(progress()).toHaveText("Schritt 3 von 4");
+    await expectImage("Der Vault-Ordner Knowledge ist der Wissensdatenbank Product handbook zugeordnet.");
     await continueButton().click();
     await expect(intro().$("h3")).toHaveText("Ersten Abgleich starten");
+    await expect(progress()).toHaveText("Schritt 4 von 4");
+    await expectImage("Der Synchronisierungsstatus einer Notiz mit Upload-Zeit und einer Schaltfläche zum Synchronisieren.");
     await expect(continueButton()).toHaveText("Fertig");
     await continueButton().click();
     await expect(intro()).not.toExist();
+    await waitForSettings(mainWindow);
+    await expect($('input[aria-label="Langdock-API-Key"]')).toBeDisplayed();
+    await closeSettings(mainWindow);
     const saved = await browser.executeObsidian(async ({ plugins }) => await plugins.langdockSync.loadData() as unknown);
     expect(saved).toMatchObject({ introductionSeen: true, automatic: false });
 
     await browser.reloadObsidian({ plugins: [pluginId] });
     await expect(intro()).not.toExist();
     await browser.executeObsidianCommand("langdock-sync:show-introduction");
-    await expect(progress()).toHaveText("Schritt 1 von 3");
+    await expect(progress()).toHaveText("Schritt 1 von 4");
     await browser.keys("Escape");
     await expect(intro()).not.toExist();
 
@@ -732,7 +752,7 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await about().$("button=Schließen").click();
     await expect(about()).not.toExist();
 
-    const mainWindow = await openSettings();
+    const settingsMainWindow = await openSettings();
     const topControls = await browser.execute(() => {
       const languageRow = document.querySelector('select[aria-label="Sprache"]')?.closest(".setting-item");
       const header = languageRow?.previousElementSibling;
@@ -760,9 +780,15 @@ describe("Langdock Sync in an isolated Obsidian vault", () => {
     await expect(about().$(".modal-title")).toHaveText("Über Langdock Sync");
     await about().$("button=Schließen").click();
     await $("button=Einführung anzeigen").click();
-    await expect(progress()).toHaveText("Schritt 1 von 3");
-    await browser.keys("Escape");
-    await closeSettings(mainWindow);
+    await expect(progress()).toHaveText("Schritt 1 von 4");
+    await continueButton().click();
+    await continueButton().click();
+    await continueButton().click();
+    await continueButton().click();
+    await expect(intro()).not.toExist();
+    await waitForSettings(settingsMainWindow);
+    await expect(settingsHeader).toBeDisplayed();
+    await closeSettings(settingsMainWindow);
     expect((await state()).requests).toHaveLength(0);
   });
 

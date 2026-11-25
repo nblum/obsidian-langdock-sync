@@ -31,13 +31,18 @@ async function encode(filename: string, image: Sharp): Promise<void> {
   captured.add(filename);
 }
 
-async function captureDialog(filename: string, selector: string): Promise<void> {
-  const dialog = $(selector);
-  await expect(dialog).toBeDisplayed();
+async function captureElement(filename: string, selector: string, topHeight?: number): Promise<void> {
+  const element = $(selector);
+  await expect(element).toBeDisplayed();
   await prepareFrame();
-  await dialog.waitForStable();
-  const png = Buffer.from(await browser.takeElementScreenshot((await dialog.getElement()).elementId), "base64");
-  await encode(filename, sharp(png));
+  await element.waitForStable();
+  const png = Buffer.from(await browser.takeElementScreenshot((await element.getElement()).elementId), "base64");
+  const image = sharp(png);
+  if (topHeight !== undefined) {
+    const { width } = await image.metadata();
+    image.extract({ left: 0, top: 0, width, height: topHeight });
+  }
+  await encode(filename, image);
 }
 
 async function captureSettings(filename: string, first: string, last: string): Promise<void> {
@@ -115,7 +120,7 @@ describe("Langdock Sync documentation screenshots (opt-in)", () => {
       seed: [
         legacy("guide-old", "Knowledge/Support guide.md", "---\nclassification: public\n---\nUse the support form.\n"),
         legacy("faq-old", faqPath, "---\nclassification: public\n---\nRequest a copy of the FAQ.\n"),
-        legacy("faq-current", faqPath, faq),
+        { ...legacy("faq-current", faqPath, faq), createdAt: "2026-01-15T10:00:00.000Z" },
       ],
     });
     await obsidianPage.write(".obsidian/plugins/langdock-sync/data.json", JSON.stringify({ language: "en" }));
@@ -125,8 +130,8 @@ describe("Langdock Sync documentation screenshots (opt-in)", () => {
   });
 
   it("captures the configured workflows and publishes a complete preview gallery", async () => {
-    await expect($(".langdock-sync-introduction h3")).toHaveText("Connect to Langdock");
-    await captureDialog("introduction.webp", ".langdock-sync-introduction");
+    await expect($(".langdock-sync-introduction h3")).toHaveText("Welcome to Langdock Sync");
+    await captureElement("introduction.webp", ".langdock-sync-introduction");
     await browser.keys("Escape");
 
     let mainWindow = await openCaptureSettings();
@@ -141,6 +146,7 @@ describe("Langdock Sync documentation screenshots (opt-in)", () => {
     await expect($('.langdock-sync-message--success[role="status"]')).toHaveText("Connection successful.");
     await captureSettings("connection.webp", "Langdock connection", ".langdock-sync-message--success");
 
+    await captureSettings("manage-folders.webp", "Manage folders", "Knowledge");
     await expect($(".setting-item-name=classification = public")).toExist();
     await captureSettings("filters.webp", "Manage folders", "classification = public");
     await closeSettings(mainWindow);
@@ -150,7 +156,7 @@ describe("Langdock Sync documentation screenshots (opt-in)", () => {
     await expect(list).toHaveText(expect.stringContaining("Upload · Knowledge/Launch notes.md"));
     await expect(list).toHaveText(expect.stringContaining("Update · Knowledge/Support guide.md"));
     await expect(list).toHaveText(expect.stringContaining("Delete · Knowledge/FAQ.md (older copy)"));
-    await captureDialog("preview.webp", ".modal:has(.modal-title)");
+    await captureElement("preview.webp", ".modal:has(.modal-title)");
     await browser.keys("Escape");
 
     await browser.executeObsidian(async ({ plugins }) => {
@@ -168,9 +174,28 @@ describe("Langdock Sync documentation screenshots (opt-in)", () => {
     await captureSettings("sync-status.webp", "Sync automatically", ".langdock-sync-status");
     await closeSettings(mainWindow);
 
+    await browser.executeObsidian(async ({ app }) => {
+      const file = app.vault.getFileByPath("Knowledge/FAQ.md");
+      if (!file) throw new Error("The example note is missing.");
+      const leaf = app.workspace.getLeaf("split", "vertical");
+      await leaf.openFile(file);
+      app.workspace.setActiveLeaf(leaf, { focus: true });
+    });
+    const noteView = ".workspace-leaf.mod-active .workspace-leaf-content";
+    const noteBadge = $(`${noteView} .langdock-sync-note-action`);
+    await expect(noteBadge).toHaveText("Synced");
+    await expect($(".notice-container .notice")).not.toBeDisplayed();
+    await captureElement("synced-note.webp", noteView, 126);
+    await noteBadge.click();
+    const fileStatus = ".langdock-sync-note-dialog";
+    await expect($(`${fileStatus} .langdock-sync-note-status`)).toHaveText("Synced");
+    await expect($(`${fileStatus} .langdock-sync-note-upload-time`)).toHaveAttribute("datetime", "2026-01-15T10:00:00.000Z");
+    await captureElement("file-status.webp", fileStatus);
+    await browser.keys("Escape");
+
     await browser.executeObsidianCommand("langdock-sync:show-about");
     await expect($(".langdock-sync-about .modal-title")).toHaveText("About Langdock Sync");
-    await captureDialog("about.webp", ".langdock-sync-about");
+    await captureElement("about.webp", ".langdock-sync-about");
     await browser.keys("Escape");
 
     assert.deepEqual([...captured].sort(), assets.map(({ filename }) => filename).sort());

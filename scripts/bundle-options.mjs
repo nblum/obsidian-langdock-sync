@@ -10,6 +10,7 @@ export const bundleOptions = {
   platform: "browser",
   target: "es2022",
   external: ["obsidian"],
+  loader: { ".webp": "dataurl" },
   define: { LANGDOCK_TEST_API_URL: "undefined" },
   banner: { js: `/*\nLangdock Sync\n${projectLicense}\n\nyaml\n${yamlLicense}\n*/` },
 };

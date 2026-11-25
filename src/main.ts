@@ -1,5 +1,5 @@
 import { getLanguage, Notice, Plugin, requestUrl, TFolder } from "obsidian";
-import type { Command, Modal, TAbstractFile } from "obsidian";
+import type { App, Command, Modal, TAbstractFile } from "obsidian";
 import { apiKeySecretId, emptyStatus, findFolderMapping, isLangdockId, isVisiblePath, readData } from "./config.ts";
 import type { Settings, SyncStatus } from "./config.ts";
 import { AboutModal, IntroductionModal } from "./help.ts";
@@ -108,12 +108,28 @@ export default class LangdockSyncPlugin extends Plugin {
   }
 
   showIntroduction(): void {
-    this.openHelpDialog(new IntroductionModal(this.app, this.translate));
+    this.openHelpDialog(new IntroductionModal(this.app, this.translate, () => { void this.openSettings(); }));
     if (this.introductionSeen) return;
     this.introductionSeen = true;
     void this.persist().catch(() => {
       if (!this.stopped) this.notify(this.translate("errors.settingsSave"));
     });
+  }
+
+  private async openSettings(): Promise<void> {
+    // Obsidian's settings controller is internal and can differ across versions.
+    const { setting } = this.app as App & { setting?: {
+      open?: () => Promise<void> | void;
+      openTabById?: (id: string) => Promise<void> | void;
+    } };
+    if (typeof setting?.open !== "function" || typeof setting.openTabById !== "function") return;
+
+    try {
+      await setting.open();
+      await setting.openTabById(this.manifest.id);
+    } catch (error) {
+      console.warn("Langdock Sync could not open its settings", error);
+    }
   }
 
   private openHelpDialog(dialog: Modal): void {

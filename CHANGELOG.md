@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Start the introduction with a welcome page and open the Langdock Sync settings when you select **Done**.
+- Illustrate each introduction step with an Obsidian screenshot.
+
 ## [0.3.0] - 2026-11-24
 
 ### Added

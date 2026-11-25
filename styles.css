@@ -80,6 +80,20 @@
   margin-block-start: var(--size-4-4);
 }
 
+.langdock-sync-introduction {
+  --dialog-width: 704px;
+}
+
+.langdock-sync-introduction-image {
+  display: block;
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  max-block-size: min(26rem, 44vh);
+  margin-inline: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
 .langdock-sync-introduction-progress {
   margin-inline-end: auto;
 }

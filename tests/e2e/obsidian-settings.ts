@@ -14,6 +14,11 @@ export async function openSettings(): Promise<string> {
     await setting.open();
     await setting.openTabById("langdock-sync");
   });
+  await waitForSettings(mainWindow);
+  return mainWindow;
+}
+
+export async function waitForSettings(mainWindow: string): Promise<void> {
   const keyField = $('input[type="password"]');
   await waitFor(async () => {
     if (await keyField.isExisting()) return true;
@@ -22,7 +27,6 @@ export async function openSettings(): Promise<string> {
     if (popup && await browser.getWindowHandle() !== popup) await browser.switchToWindow(popup);
     return keyField.isExisting();
   }, "Langdock Sync settings did not open");
-  return mainWindow;
 }
 
 export async function closeSettings(mainWindow: string): Promise<void> {
